@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'MetaEdge — Professional Bank Management',
-  description: 'Manage your betting bankroll with professional data tracking and smart goal setting.',
+  title: 'MetaEdge',
+  description: 'Gestão inteligente de banca.',
   icons: {
     icon: "/favicon.png",
     apple: "/favicon.png",
