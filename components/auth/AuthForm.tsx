@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { Eye, EyeOff } from 'lucide-react'
 
 type Mode = 'login' | 'register'
 
@@ -11,6 +12,7 @@ export default function AuthForm({ mode }: { mode: Mode }) {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPass, setShowPass] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -26,81 +28,81 @@ export default function AuthForm({ mode }: { mode: Mode }) {
         password,
         options: { data: { name } },
       })
-      if (signUpError) {
-        setError(signUpError.message)
-        setLoading(false)
-        return
-      }
+      if (signUpError) { setError(signUpError.message); setLoading(false); return }
       if (data.user) {
-        await supabase.from('profiles').upsert({
-          id: data.user.id,
-          name,
-          email,
-          current_bankroll: 0,
-        })
+        await supabase.from('profiles').upsert({ id: data.user.id, name, email, current_bankroll: 0 })
       }
       router.push('/dashboard')
     } else {
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
-      if (signInError) {
-        setError(signInError.message)
-        setLoading(false)
-        return
-      }
+      if (signInError) { setError(signInError.message); setLoading(false); return }
       router.push('/dashboard')
     }
     router.refresh()
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4 w-full">
+    <form onSubmit={handleSubmit} className="space-y-5">
       {mode === 'register' && (
         <div>
-          <label className="block text-sm text-gray-400 mb-1">Nome</label>
+          <label className="field-label">Nome</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
             placeholder="Seu nome"
-            className="w-full bg-[#0a1628] border border-[#00ff88]/20 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-[#00ff88]/60 transition-colors"
+            className="field-input"
           />
         </div>
       )}
+
       <div>
-        <label className="block text-sm text-gray-400 mb-1">Email</label>
+        <label className="field-label">Email</label>
         <input
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
           placeholder="seu@email.com"
-          className="w-full bg-[#0a1628] border border-[#00ff88]/20 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-[#00ff88]/60 transition-colors"
+          className="field-input"
         />
       </div>
+
       <div>
-        <label className="block text-sm text-gray-400 mb-1">Senha</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          placeholder="••••••••"
-          minLength={6}
-          className="w-full bg-[#0a1628] border border-[#00ff88]/20 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-[#00ff88]/60 transition-colors"
-        />
+        <label className="field-label">Senha</label>
+        <div className="relative">
+          <input
+            type={showPass ? 'text' : 'password'}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            placeholder="••••••••"
+            minLength={6}
+            className="field-input pr-12"
+          />
+          <button
+            type="button"
+            onClick={() => setShowPass(!showPass)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-premium"
+          >
+            {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
       </div>
+
       {error && (
-        <p className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-4 py-2">
+        <div className="flex items-start gap-3 text-red-400 text-sm bg-red-400/8 border border-red-400/15 rounded-xl px-4 py-3">
+          <span className="flex-shrink-0 mt-0.5">⚠</span>
           {error}
-        </p>
+        </div>
       )}
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full py-3 rounded-lg font-semibold text-[#0a0f1e] bg-gradient-to-r from-[#00ff88] to-[#00b4d8] shadow-[0_0_20px_rgba(0,255,136,0.3)] hover:shadow-[0_0_30px_rgba(0,255,136,0.5)] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-      >
-        {loading ? 'Aguarde...' : mode === 'login' ? 'Entrar' : 'Criar conta'}
+
+      <button type="submit" disabled={loading} className="btn-primary mt-2">
+        {loading
+          ? <span className="flex items-center gap-2"><span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" /> Aguarde...</span>
+          : mode === 'login' ? 'Entrar na conta' : 'Criar conta'
+        }
       </button>
     </form>
   )

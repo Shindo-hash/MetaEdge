@@ -40,32 +40,22 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
       is_active: true,
     })
 
-    if (insertError) {
-      setError(insertError.message)
-    } else {
-      setSuccess(true)
-      router.refresh()
-    }
+    if (insertError) { setError(insertError.message) } else { setSuccess(true); router.refresh() }
     setLoading(false)
   }
 
-  const inputClass = "w-full bg-[#0a1628] border border-[#00ff88]/20 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-[#00ff88]/60 transition-colors"
-
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
+    <form onSubmit={handleSubmit} className="space-y-6">
+      {/* Strategy */}
       <div>
-        <label className="block text-sm text-gray-400 mb-2">Estratégia</label>
+        <label className="field-label">Estratégia</label>
         <div className="grid grid-cols-2 gap-2">
           {(['fixed', 'compound'] as const).map((s) => (
             <button
               key={s}
               type="button"
               onClick={() => setStrategy(s)}
-              className={`py-2.5 px-4 rounded-lg text-sm font-medium border transition-all ${
-                strategy === s
-                  ? 'bg-[#00ff88]/10 border-[#00ff88]/40 text-[#00ff88]'
-                  : 'bg-[#0a1628] border-[#00ff88]/10 text-gray-400 hover:border-[#00ff88]/20'
-              }`}
+              className={`strategy-pill ${strategy === s ? 'strategy-pill-active' : 'strategy-pill-inactive'}`}
             >
               {s === 'fixed' ? 'Meta Fixa' : 'Juros Compostos'}
             </button>
@@ -75,61 +65,70 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm text-gray-400 mb-1">Banca Inicial (R$)</label>
-          <input type="number" value={initialBankroll} onChange={(e) => setInitialBankroll(e.target.value)} required min="0" step="0.01" className={inputClass} />
+          <label className="field-label">Banca Inicial (R$)</label>
+          <input type="number" value={initialBankroll} onChange={(e) => setInitialBankroll(e.target.value)}
+            required min="0" step="0.01" className="field-input" />
         </div>
         <div>
-          <label className="block text-sm text-gray-400 mb-1">Data de Início</label>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required className={inputClass} />
+          <label className="field-label">Data de Início</label>
+          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}
+            required className="field-input" />
         </div>
       </div>
 
       {strategy === 'fixed' && (
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Meta Final (R$)</label>
-            <input type="number" value={targetBankroll} onChange={(e) => setTargetBankroll(e.target.value)} required min="0" step="0.01" className={inputClass} />
+            <label className="field-label">Meta Final (R$)</label>
+            <input type="number" value={targetBankroll} onChange={(e) => setTargetBankroll(e.target.value)}
+              required min="0" step="0.01" className="field-input" />
           </div>
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Número de Semanas</label>
-            <input type="number" value={weeks} onChange={(e) => setWeeks(e.target.value)} required min="1" step="1" className={inputClass} />
+            <label className="field-label">Nº de Semanas</label>
+            <input type="number" value={weeks} onChange={(e) => setWeeks(e.target.value)}
+              required min="1" step="1" className="field-input" />
           </div>
         </div>
       )}
 
       {strategy === 'compound' && (
         <div>
-          <label className="block text-sm text-gray-400 mb-1">Crescimento Diário (%)</label>
-          <input type="number" value={dailyPct} onChange={(e) => setDailyPct(e.target.value)} required min="0.1" max="100" step="0.1" placeholder="Ex: 5" className={inputClass} />
+          <label className="field-label">Crescimento Diário (%)</label>
+          <input type="number" value={dailyPct} onChange={(e) => setDailyPct(e.target.value)}
+            required min="0.1" max="100" step="0.1" placeholder="Ex: 5" className="field-input" />
         </div>
       )}
 
-      <div className="flex items-center gap-3">
+      {/* Weekend toggle */}
+      <div className="flex items-center gap-4 py-1">
         <button
           type="button"
           onClick={() => setPlayWeekends(!playWeekends)}
-          className={`w-10 h-6 rounded-full transition-all relative ${playWeekends ? 'bg-[#00ff88]' : 'bg-gray-700'}`}
+          className="toggle-track"
+          data-on={String(playWeekends)}
         >
-          <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${playWeekends ? 'left-5' : 'left-1'}`} />
+          <span className="toggle-thumb" />
         </button>
-        <span className="text-sm text-gray-400">Jogo nos fins de semana</span>
+        <div>
+          <p className="text-sm font-medium text-white/80">Jogo nos fins de semana</p>
+          <p className="text-xs text-white/30">Inclui sábado e domingo no cálculo</p>
+        </div>
       </div>
 
       {success && (
-        <p className="text-[#00ff88] text-sm bg-[#00ff88]/10 border border-[#00ff88]/20 rounded-lg px-4 py-2">
+        <div className="text-accent-green text-sm bg-accent-green/8 border border-accent-green/20 rounded-xl px-4 py-3">
           Meta configurada com sucesso!
-        </p>
+        </div>
       )}
       {error && (
-        <p className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-4 py-2">{error}</p>
+        <div className="text-red-400 text-sm bg-red-400/8 border border-red-400/15 rounded-xl px-4 py-3">{error}</div>
       )}
 
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full py-3 rounded-lg font-semibold text-[#0a0f1e] bg-gradient-to-r from-[#00ff88] to-[#00b4d8] shadow-[0_0_20px_rgba(0,255,136,0.3)] hover:shadow-[0_0_30px_rgba(0,255,136,0.5)] transition-all disabled:opacity-50"
-      >
-        {loading ? 'Salvando...' : 'Ativar Meta'}
+      <button type="submit" disabled={loading} className="btn-primary">
+        {loading
+          ? <span className="flex items-center gap-2"><span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" /> Salvando...</span>
+          : 'Ativar Meta'
+        }
       </button>
     </form>
   )

@@ -4,11 +4,10 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { ArrowDown, ArrowUp } from 'lucide-react'
 
-type Props = {
-  userId: string
-  currentBankroll: number
-}
+type Props = { userId: string; currentBankroll: number }
 
 export default function TransactionForm({ userId, currentBankroll }: Props) {
   const router = useRouter()
@@ -20,9 +19,7 @@ export default function TransactionForm({ userId, currentBankroll }: Props) {
   const [error, setError] = useState<string | null>(null)
 
   const parsedAmount = Number(amount)
-  const newBankroll = type === 'deposit'
-    ? currentBankroll + parsedAmount
-    : currentBankroll - parsedAmount
+  const newBankroll = type === 'deposit' ? currentBankroll + parsedAmount : currentBankroll - parsedAmount
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -37,23 +34,13 @@ export default function TransactionForm({ userId, currentBankroll }: Props) {
     const supabase = createClient()
 
     const { error: insertError } = await supabase.from('transactions').insert({
-      user_id: userId,
-      type,
-      amount: parsedAmount,
-      note: note.trim() || null,
-      date,
+      user_id: userId, type, amount: parsedAmount,
+      note: note.trim() || null, date,
     })
 
-    if (insertError) {
-      setError(insertError.message)
-      setLoading(false)
-      return
-    }
+    if (insertError) { setError(insertError.message); setLoading(false); return }
 
-    await supabase
-      .from('profiles')
-      .update({ current_bankroll: newBankroll })
-      .eq('id', userId)
+    await supabase.from('profiles').update({ current_bankroll: newBankroll }).eq('id', userId)
 
     setAmount('')
     setNote('')
@@ -61,27 +48,25 @@ export default function TransactionForm({ userId, currentBankroll }: Props) {
     setLoading(false)
   }
 
-  const inputClass =
-    'w-full bg-[#0a1628] border border-[#00ff88]/20 rounded-lg px-4 py-2.5 text-white placeholder-gray-600 focus:outline-none focus:border-[#00ff88]/60 transition-colors'
-
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      {/* Tipo */}
+    <form onSubmit={handleSubmit} className="space-y-5">
+      {/* Type selector */}
       <div className="grid grid-cols-2 gap-2">
         {(['deposit', 'withdrawal'] as const).map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setType(t)}
-            className={`py-2.5 px-4 rounded-lg text-sm font-semibold border transition-all flex items-center justify-center gap-2 ${
+            className={cn(
+              'strategy-pill flex items-center justify-center gap-2',
               type === t
                 ? t === 'deposit'
-                  ? 'bg-[#00ff88]/10 border-[#00ff88]/40 text-[#00ff88]'
-                  : 'bg-red-400/10 border-red-400/40 text-red-400'
-                : 'bg-[#0a1628] border-[#00ff88]/10 text-gray-400 hover:border-[#00ff88]/20'
-            }`}
+                  ? 'strategy-pill-active'
+                  : 'bg-red-400/8 border-red-400/30 text-red-400'
+                : 'strategy-pill-inactive'
+            )}
           >
-            <span>{t === 'deposit' ? '↑' : '↓'}</span>
+            {t === 'deposit' ? <ArrowDown size={14} /> : <ArrowUp size={14} />}
             {t === 'deposit' ? 'Depósito' : 'Saque'}
           </button>
         ))}
@@ -89,76 +74,66 @@ export default function TransactionForm({ userId, currentBankroll }: Props) {
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm text-gray-400 mb-1">Valor (R$)</label>
-          <input
-            type="number"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            required
-            min="0.01"
-            step="0.01"
-            placeholder="0,00"
-            className={inputClass}
-          />
+          <label className="field-label">Valor (R$)</label>
+          <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)}
+            required min="0.01" step="0.01" placeholder="0,00" className="field-input" />
         </div>
         <div>
-          <label className="block text-sm text-gray-400 mb-1">Data</label>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            required
-            className={inputClass}
-          />
+          <label className="field-label">Data</label>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+            required className="field-input" />
         </div>
       </div>
 
       <div>
-        <label className="block text-sm text-gray-400 mb-1">Observação (opcional)</label>
-        <input
-          type="text"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="Ex: bônus de boas-vindas"
-          maxLength={120}
-          className={inputClass}
-        />
+        <label className="field-label">Observação (opcional)</label>
+        <input type="text" value={note} onChange={(e) => setNote(e.target.value)}
+          placeholder="Ex: bônus de boas-vindas" maxLength={120} className="field-input" />
       </div>
 
       {/* Preview */}
       {amount && parsedAmount > 0 && (
-        <div className={`rounded-lg px-4 py-3 border flex items-center justify-between text-sm ${
+        <div className={cn(
+          'rounded-2xl px-5 py-4 border flex items-center justify-between',
           type === 'deposit'
-            ? 'bg-[#00ff88]/5 border-[#00ff88]/20'
+            ? 'bg-accent-green/5 border-accent-green/20'
             : newBankroll < 0
-            ? 'bg-red-500/10 border-red-500/30'
-            : 'bg-red-400/5 border-red-400/20'
-        }`}>
-          <span className="text-gray-400">
-            Banca após {type === 'deposit' ? 'depósito' : 'saque'}
-          </span>
-          <span className={`font-bold ${newBankroll < 0 ? 'text-red-500' : type === 'deposit' ? 'text-[#00ff88]' : 'text-red-400'}`}>
-            {formatCurrency(Math.max(0, newBankroll))}
+              ? 'bg-red-500/8 border-red-500/25'
+              : 'bg-red-400/5 border-red-400/15'
+        )}>
+          <div>
+            <p className="text-[10px] uppercase tracking-widest font-bold text-white/30 mb-0.5">
+              Banca após {type === 'deposit' ? 'depósito' : 'saque'}
+            </p>
+            <p className={cn(
+              'text-xl font-black tracking-tighter',
+              newBankroll < 0 ? 'text-red-500' : type === 'deposit' ? 'text-accent-green' : 'text-red-400'
+            )}>
+              {formatCurrency(Math.max(0, newBankroll))}
+            </p>
+          </div>
+          <span className={cn(
+            'text-xs font-bold uppercase tracking-widest',
+            type === 'deposit' ? 'text-accent-green/60' : 'text-red-400/60'
+          )}>
+            {type === 'deposit' ? `+${formatCurrency(parsedAmount)}` : `-${formatCurrency(parsedAmount)}`}
           </span>
         </div>
       )}
 
       {error && (
-        <p className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-4 py-2">
-          {error}
-        </p>
+        <div className="text-red-400 text-sm bg-red-400/8 border border-red-400/15 rounded-xl px-4 py-3">{error}</div>
       )}
 
       <button
         type="submit"
         disabled={loading || !amount || parsedAmount <= 0}
-        className={`w-full py-3 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-          type === 'deposit'
-            ? 'text-[#0a0f1e] bg-gradient-to-r from-[#00ff88] to-[#00b4d8] shadow-[0_0_20px_rgba(0,255,136,0.3)] hover:shadow-[0_0_30px_rgba(0,255,136,0.5)]'
-            : 'text-white bg-gradient-to-r from-red-500 to-red-600 shadow-[0_0_20px_rgba(239,68,68,0.2)] hover:shadow-[0_0_30px_rgba(239,68,68,0.4)]'
-        }`}
+        className={type === 'deposit' ? 'btn-primary' : 'btn-danger'}
       >
-        {loading ? 'Salvando...' : type === 'deposit' ? 'Registrar Depósito' : 'Registrar Saque'}
+        {loading
+          ? <span className="flex items-center gap-2"><span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" /> Salvando...</span>
+          : type === 'deposit' ? 'Registrar Depósito' : 'Registrar Saque'
+        }
       </button>
     </form>
   )

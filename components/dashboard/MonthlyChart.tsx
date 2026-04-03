@@ -12,6 +12,7 @@ import {
 import { Bar } from 'react-chartjs-2'
 import { Session } from '@/types'
 import { formatCurrency } from '@/lib/utils'
+import { BarChart2 } from 'lucide-react'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
@@ -42,11 +43,12 @@ export default function MonthlyChart({ sessions }: Props) {
         label: 'Lucro',
         data,
         backgroundColor: data.map((v) =>
-          v >= 0 ? 'rgba(0,255,136,0.7)' : 'rgba(248,113,113,0.7)'
+          v >= 0 ? 'rgba(0,255,136,0.65)' : 'rgba(248,113,113,0.65)'
         ),
         borderColor: data.map((v) => (v >= 0 ? '#00ff88' : '#f87171')),
         borderWidth: 1,
-        borderRadius: 6,
+        borderRadius: 8,
+        borderSkipped: false,
       },
     ],
   }
@@ -57,26 +59,28 @@ export default function MonthlyChart({ sessions }: Props) {
     plugins: {
       legend: { display: false },
       tooltip: {
-        backgroundColor: '#0d1b2a',
-        borderColor: '#00ff88',
+        backgroundColor: 'rgba(10,18,35,0.95)',
+        borderColor: 'rgba(0,255,136,0.25)',
         borderWidth: 1,
         titleColor: '#00ff88',
-        bodyColor: '#fff',
-        callbacks: {
-          label: (ctx: any) => ` ${formatCurrency(ctx.parsed.y)}`,
-        },
+        bodyColor: 'rgba(255,255,255,0.7)',
+        padding: 12,
+        cornerRadius: 10,
+        callbacks: { label: (ctx: any) => ` ${formatCurrency(ctx.parsed.y)}` },
       },
     },
     scales: {
       x: {
         grid: { display: false },
-        ticks: { color: '#6b7280', font: { size: 11 } },
+        border: { display: false },
+        ticks: { color: 'rgba(255,255,255,0.25)', font: { size: 10, family: 'Inter' } },
       },
       y: {
-        grid: { color: 'rgba(255,255,255,0.04)' },
+        grid: { color: 'rgba(255,255,255,0.03)' },
+        border: { display: false },
         ticks: {
-          color: '#6b7280',
-          font: { size: 11 },
+          color: 'rgba(255,255,255,0.25)',
+          font: { size: 10, family: 'Inter' },
           callback: (v: any) => formatCurrency(Number(v)),
         },
       },
@@ -85,14 +89,17 @@ export default function MonthlyChart({ sessions }: Props) {
 
   if (sorted.length === 0) {
     return (
-      <div className="flex items-center justify-center h-48 text-gray-500 text-sm">
-        Nenhum dado mensal disponível
+      <div className="flex flex-col items-center justify-center h-56 gap-3">
+        <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center">
+          <BarChart2 size={18} className="text-white/15" />
+        </div>
+        <p className="text-white/25 text-sm">Nenhum dado mensal disponível</p>
       </div>
     )
   }
 
   return (
-    <div className="h-52">
+    <div className="h-56">
       <Bar data={chartData} options={options as any} />
     </div>
   )
