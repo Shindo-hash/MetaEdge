@@ -1,46 +1,91 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { calculateGoal } from '@/lib/goals'
+import { calculateGoal, countOpDays, getCompoundDailyGoalForOpDay, calcDynamicGoals } from '@/lib/services/goals'
+import { ensureCycleForCurrentMonth } from '@/lib/services/cycles'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import GoalForm from '@/components/goals/GoalForm'
-import { Target, TrendingUp, ShieldCheck, Calculator, CalendarDays, ChevronDown, Info } from 'lucide-react'
+import PrintButton from '@/components/PrintButton'
+import { Target, TrendingUp, ShieldCheck, Calculator, CalendarDays, ChevronDown, Info, TrendingDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { Cycle } from '@/types'
 
-/* ── helpers ──────────────────────────────────────────────── */
+/* ── Helpers ────────────────────────────────────────────────── */
 
-function buildCalendarRows(
-  strategy: 'fixed' | 'compound',
-  base: number,
-  pct: number,         // decimal  (ex: 0.05)
-  fixedDailyGoal: number,
-) {
-  return Array.from({ length: 30 }, (_, i) => {
-    if (strategy === 'compound') {
-      const bankroll = base * Math.pow(1 + pct, i)
-      const meta     = bankroll * pct
-      return { day: i + 1, bankroll, meta }
-    }
-    // fixed: banca cresce linearmente, meta constante
-    const bankroll = base + fixedDailyGoal * i
-    return { day: i + 1, bankroll, meta: fixedDailyGoal }
-  })
+function getDaysInMonth(year: number, month: number) {
+  return new Date(year, month, 0).getDate()
 }
 
-/** Quantos dias úteis (respeitando play_weekends) de start_date até hoje */
-function todayRowIndex(startDate: string, playWeekends: boolean): number {
-  const start = new Date(startDate + 'T00:00:00')
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  if (today < start) return -1
+interface CalendarDay {
+  dateStr: string
+  dayNum: number
+  label: string          // ex: "Ter, 01"
+  isToday: boolean
+  isWeekendDay: boolean
+  isOpDay: boolean       // tem meta?
+  opDayIndex: number     // quantos dias operacionais até este (inclusive), ou 0
+  bankroll: number | null
+  meta: number | null
+}
 
-  let count = 0
-  const cursor = new Date(start)
-  while (cursor <= today) {
-    const dow = cursor.getDay() // 0=Dom 6=Sáb
-    if (playWeekends || (dow !== 0 && dow !== 6)) count++
-    cursor.setDate(cursor.getDate() + 1)
+function buildRealCalendar(
+  year: number,
+  month: number,
+  cycle: Cycle,
+  goalInitialBankroll: number,
+  strategy: 'fixed' | 'compound',
+  pct: number,
+): CalendarDay[] {
+  const days = getDaysInMonth(year, month)
+  const todayStr = new Date().toISOString().split('T')[0]
+  const rows: CalendarDay[] = []
+  const weekdayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+
+  let opDayIndex = 0
+
+  for (let d = 1; d <= days; d++) {
+    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    const dateObj = new Date(dateStr + 'T00:00:00')
+    const dow = dateObj.getDay()
+    const weekend = dow === 0 || dow === 6
+
+    // Se play_weekends: todo dia é op. Senão: apenas dias úteis.
+    const isPlayWeekends = cycle.op_days_total === days
+    const isOp = isPlayWeekends || !weekend
+
+    if (isOp) opDayIndex++
+
+    let bankroll: number | null = null
+    let meta: number | null = null
+
+    if (isOp) {
+      if (strategy === 'compound') {
+        // Compound: banca cresce exponencialmente a cada dia operacional
+        // bancaDia = inicial × (1 + pct)^opDayIndex
+        // metaDia  = bancaDiaAnterior × pct
+        const bancaHoje    = goalInitialBankroll * Math.pow(1 + pct, opDayIndex)
+        const bancaAnterior = goalInitialBankroll * Math.pow(1 + pct, opDayIndex - 1)
+        bankroll = bancaHoje
+        meta     = bancaAnterior * pct
+      } else {
+        // Fixed: meta constante, banca cresce linearmente
+        meta     = cycle.daily_goal_fixed
+        bankroll = goalInitialBankroll + cycle.daily_goal_fixed * opDayIndex
+      }
+    }
+
+    rows.push({
+      dateStr,
+      dayNum: d,
+      label: `${weekdayNames[dow]}, ${String(d).padStart(2, '0')}`,
+      isToday: dateStr === todayStr,
+      isWeekendDay: weekend,
+      isOpDay: isOp,
+      opDayIndex: isOp ? opDayIndex : 0,
+      bankroll,
+      meta,
+    })
   }
-  return count // 1-based row que representa "hoje"
+  return rows
 }
 
 /* ── Page ─────────────────────────────────────────────────── */
@@ -56,32 +101,90 @@ export default async function GoalsPage() {
     supabase.from('sessions').select('*').eq('user_id', user.id).order('date', { ascending: false }),
   ])
 
-  const currentBankroll  = profile?.current_bankroll ?? 0
+  const currentBankroll   = profile?.current_bankroll ?? 0
   const effectiveBankroll = currentBankroll > 0 ? currentBankroll : (goal?.initial_bankroll ?? 0)
-  const goalCalc = goal ? calculateGoal(goal, effectiveBankroll, sessions ?? []) : null
+  const goalCalc = goal ? calculateGoal(goal) : null
 
-  /* calendário */
-  const pct = goal?.strategy === 'compound' ? (goal.daily_percentage ?? 0) / 100 : 0
-  const calendarRows = goal && goalCalc
-    ? buildCalendarRows(goal.strategy, effectiveBankroll, pct, goalCalc.dailyGoal)
+  /* ── Ciclo ──────────────────────────────────────────────── */
+  let cycle: Cycle | null = null
+  if (goal) {
+    try {
+      cycle = await ensureCycleForCurrentMonth(
+        supabase, user.id, goal, sessions ?? [], currentBankroll
+      )
+    } catch (_) { /* sem ciclo ativo — pode ser primeiro acesso */ }
+  }
+
+  /* ── Metas dinâmicas ─────────────────────────────────────── */
+  const now   = new Date()
+  const year  = now.getFullYear()
+  const month = now.getMonth() + 1
+  const pct   = goal?.strategy === 'compound' ? (goal.daily_percentage ?? 0) / 100 : 0
+
+  const todayStr     = now.toISOString().split('T')[0]
+  const todayOpIndex = (cycle && goal)
+    ? countOpDays(cycle.start_date, todayStr, goal.play_weekends)
+    : 0
+  const todayDailyGoal = (goal?.strategy === 'compound' && cycle && todayOpIndex > 0)
+    ? getCompoundDailyGoalForOpDay(goal.initial_bankroll, pct, todayOpIndex)
+    : (goal?.strategy === 'fixed' && cycle ? cycle.daily_goal_fixed : (goalCalc?.dailyGoal ?? 0))
+
+  const dynamicGoals = (goal && cycle)
+    ? calcDynamicGoals(goal, cycle.start_date, todayStr, cycle.daily_goal_fixed ?? 0)
+    : null
+
+  const calendarRows = (goal && cycle)
+    ? buildRealCalendar(year, month, cycle, goal.initial_bankroll, goal.strategy, pct)
     : []
-  const totalMeta   = calendarRows.reduce((s, r) => s + r.meta, 0)
-  const todayRow    = goal ? todayRowIndex(goal.start_date, goal.play_weekends) : -1
+
+  /* ── Progresso do ciclo ─────────────────────────────────── */
+  const cycleSessions     = (sessions ?? []).filter(s => cycle && s.date >= cycle.start_date)
+  const accumulatedProfit = cycleSessions.reduce((acc, s) => acc + s.profit, 0)
+  // opDaysElapsed: dias operacionais corridos desde início do ciclo até hoje
+  const opDaysElapsed = (cycle && goal)
+    ? countOpDays(cycle.start_date, todayStr, goal.play_weekends)
+    : 0
+  // Lucro esperado até hoje: compound usa fórmula exponencial, fixed é linear
+  const expectedProfit = (goal && cycle)
+    ? goal.strategy === 'compound'
+      ? goal.initial_bankroll * (Math.pow(1 + pct, opDaysElapsed) - 1)
+      : cycle.daily_goal_fixed * opDaysElapsed
+    : 0
+  const progressDiff = accumulatedProfit - expectedProfit
+  const isAhead      = progressDiff >= 0
+  const totalMeta    = calendarRows.reduce((s, r) => s + (r.meta ?? 0), 0)
+
+  /* ── Dados para impressão ───────────────────────────────── */
+  const sessionMap = Object.fromEntries((sessions ?? []).map(s => [s.date, s]))
+  const printRows = calendarRows.map(row => ({
+    ...row,
+    actual:   row.isOpDay ? (sessionMap[row.dateStr]?.profit ?? null) : null,
+    isFuture: row.dateStr > todayStr,
+  }))
+  const printTotalMeta   = printRows.reduce((s, r) => s + (r.meta ?? 0), 0)
+  const printTotalActual = printRows.filter(r => !r.isFuture && r.actual !== null)
+    .reduce((s, r) => s + (r.actual ?? 0), 0)
+  const printDelta       = printTotalActual - printTotalMeta
+
+  const monthName = now.toLocaleString('pt-BR', { month: 'long', year: 'numeric' })
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto pb-10">
 
       {/* ── Cabeçalho ── */}
-      <div className="flex items-center gap-4 animate-fade-in">
-        <div className="p-3.5 bg-accent-green/10 rounded-2xl border border-accent-green/20 neon-glow-green">
-          <Target className="text-accent-green" size={26} />
+      <div className="flex items-center justify-between animate-fade-in">
+        <div className="flex items-center gap-4">
+          <div className="p-3.5 bg-accent-green/10 rounded-2xl border border-accent-green/20 neon-glow-green">
+            <Target className="text-accent-green" size={26} />
+          </div>
+          <div>
+            <h2 className="text-4xl font-black text-white tracking-tight leading-none">Metas</h2>
+            <p className="text-white/35 text-xs font-bold uppercase tracking-widest mt-2">
+              Planejamento Estratégico de Banca
+            </p>
+          </div>
         </div>
-        <div>
-          <h2 className="text-4xl font-black text-white tracking-tight leading-none">Metas</h2>
-          <p className="text-white/35 text-xs font-bold uppercase tracking-widest mt-2">
-            Planejamento Estratégico de Banca
-          </p>
-        </div>
+        {goal && <PrintButton label="Imprimir Plano" />}
       </div>
 
       {/* ── Meta ativa ── */}
@@ -102,9 +205,27 @@ export default async function GoalsPage() {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-8 relative z-10">
             {[
-              { icon: Target, label: 'Meta Diária', value: formatCurrency(goalCalc.dailyGoal), color: 'text-accent-green', border: 'border-accent-green/20' },
-              { icon: TrendingUp, label: 'Alvo Semanal', value: formatCurrency(goalCalc.weeklyGoal), color: 'text-white', border: 'border-white/5' },
-              { icon: TrendingUp, label: 'Alvo Mensal', value: formatCurrency(goalCalc.monthlyGoal), color: 'text-accent-blue', border: 'border-accent-blue/20' },
+              {
+                icon: Target,
+                label: goal?.strategy === 'compound' ? 'Meta de Hoje' : 'Meta Diária (Fixa)',
+                value: formatCurrency(todayDailyGoal),
+                color: 'text-accent-green',
+                border: 'border-accent-green/20',
+              },
+              {
+                icon: TrendingUp,
+                label: dynamicGoals ? `Semana ${dynamicGoals.currentWeekNumber}` : 'Alvo Semanal',
+                value: formatCurrency(dynamicGoals?.weeklyGoal ?? goalCalc.weeklyGoal),
+                color: 'text-white',
+                border: 'border-white/5',
+              },
+              {
+                icon: TrendingUp,
+                label: 'Alvo Mensal',
+                value: formatCurrency(dynamicGoals?.monthlyGoal ?? goalCalc.monthlyGoal),
+                color: 'text-accent-blue',
+                border: 'border-accent-blue/20',
+              },
             ].map(({ icon: Icon, label, value, color, border }) => (
               <div key={label} className={cn('glass-card bg-white/[0.02] p-6', border)}>
                 <div className="flex items-center gap-2 mb-3">
@@ -140,53 +261,104 @@ export default async function GoalsPage() {
         </div>
       )}
 
-      {/* ── Calendário de Projeção ── */}
-      {goal && goalCalc && calendarRows.length > 0 && (
-        <div className="glass-card animate-fade-in border-white/5 overflow-hidden">
-          {/* header */}
+      {/* ── Progresso do Ciclo ── */}
+      {cycle && (
+        <div className="glass-card p-7 animate-fade-in border-white/5">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-9 h-9 rounded-xl bg-accent-blue/10 border border-accent-blue/20 flex items-center justify-center">
+              <TrendingUp size={17} className="text-accent-blue" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white uppercase tracking-widest">Progresso do Ciclo</h3>
+              <p className="text-xs text-white/30 mt-0.5 capitalize">{monthName}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-4">
+            <div className="glass-card bg-white/[0.02] p-5 border-white/5">
+              <p className="text-[10px] uppercase tracking-widest text-white/30 font-bold mb-2">Lucro Acumulado</p>
+              <p className={cn('text-xl font-black tracking-tight', accumulatedProfit >= 0 ? 'text-accent-green' : 'text-red-400')}>
+                {accumulatedProfit >= 0 ? '+' : ''}{formatCurrency(accumulatedProfit)}
+              </p>
+              <p className="text-xs text-white/20 mt-1">{cycleSessions.length} sessões</p>
+            </div>
+
+            <div className="glass-card bg-white/[0.02] p-5 border-white/5">
+              <p className="text-[10px] uppercase tracking-widest text-white/30 font-bold mb-2">Esperado Até Hoje</p>
+              <p className="text-xl font-black tracking-tight text-white/70">
+                {formatCurrency(expectedProfit)}
+              </p>
+              <p className="text-xs text-white/20 mt-1">{opDaysElapsed} dias operacionais</p>
+            </div>
+
+            <div className={cn(
+              'glass-card p-5 border',
+              isAhead ? 'bg-accent-green/5 border-accent-green/20' : 'bg-red-400/5 border-red-400/20'
+            )}>
+              <p className="text-[10px] uppercase tracking-widest text-white/30 font-bold mb-2">Diferença</p>
+              <p className={cn('text-xl font-black tracking-tight flex items-center gap-1',
+                isAhead ? 'text-accent-green' : 'text-red-400'
+              )}>
+                {isAhead
+                  ? <TrendingUp size={16} />
+                  : <TrendingDown size={16} />
+                }
+                {isAhead ? '+' : ''}{formatCurrency(progressDiff)}
+              </p>
+              <p className={cn('text-xs mt-1', isAhead ? 'text-accent-green/50' : 'text-red-400/50')}>
+                {isAhead ? 'acima do esperado' : 'abaixo do esperado'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Calendário Real do Mês ── */}
+      {goal && cycle && calendarRows.length > 0 && (
+        <div className="glass-card animate-fade-in border-white/5 overflow-hidden no-print">
           <div className="px-8 py-6 border-b border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl bg-accent-green/10 border border-accent-green/20 flex items-center justify-center">
                 <CalendarDays size={17} className="text-accent-green" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-white">Calendário de Projeção · 30 Dias</h3>
+                <h3 className="text-sm font-bold text-white capitalize">
+                  Calendário — {monthName}
+                </h3>
                 <p className="text-xs text-white/30 mt-0.5">
-                  Base: {formatCurrency(effectiveBankroll)}
-                  {goal.strategy === 'compound' && ` · Taxa: ${goal.daily_percentage}% ao dia`}
+                  Base: {formatCurrency(goal.initial_bankroll)}
+                  {' '}· Meta/dia: {formatCurrency(cycle.daily_goal_fixed)}
+                  {' '}· {cycle.op_days_total} dias operacionais
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-3 text-right">
-              <div>
-                <p className="text-[10px] uppercase tracking-widest text-white/30 font-bold">Lucro projetado</p>
-                <p className="text-lg font-black text-accent-green">{formatCurrency(totalMeta)}</p>
-              </div>
+            <div className="text-right">
+              <p className="text-[10px] uppercase tracking-widest text-white/30 font-bold">Lucro projetado</p>
+              <p className="text-lg font-black text-accent-green">{formatCurrency(totalMeta)}</p>
             </div>
           </div>
 
-          {/* tabela */}
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-white/5">
-                  <th className="text-left px-8 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-white/30 w-16">Dia</th>
-                  <th className="text-right px-6 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-white/30">Valor da Banca</th>
+                  <th className="text-left px-8 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-white/30">Data</th>
+                  <th className="text-right px-6 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-white/30">Banca Projetada</th>
                   <th className="text-right px-8 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-white/30">Meta do Dia</th>
                 </tr>
               </thead>
               <tbody>
                 {calendarRows.map((row) => {
-                  const isToday = row.day === todayRow
-                  const isPast  = row.day < todayRow
-
+                  const isPast = row.dateStr < todayStr
                   return (
                     <tr
-                      key={row.day}
+                      key={row.dateStr}
                       className={cn(
                         'border-b border-white/[0.03] transition-colors',
-                        isToday
+                        row.isToday
                           ? 'bg-accent-green/8 border-accent-green/15'
+                          : row.isWeekendDay && !row.isOpDay
+                          ? 'bg-white/[0.01] opacity-50'
                           : isPast
                           ? 'opacity-40'
                           : 'hover:bg-white/[0.02]'
@@ -196,34 +368,41 @@ export default async function GoalsPage() {
                         <div className="flex items-center gap-3">
                           <span className={cn(
                             'w-8 h-8 rounded-lg flex items-center justify-center text-sm font-black flex-shrink-0',
-                            isToday
+                            row.isToday
                               ? 'bg-accent-green text-[#020d08]'
+                              : row.isWeekendDay && !row.isOpDay
+                              ? 'bg-white/5 text-white/20'
                               : isPast
                               ? 'bg-white/5 text-white/30'
                               : 'bg-white/5 text-white/50'
                           )}>
-                            {row.day}
+                            {row.dayNum}
                           </span>
-                          {isToday && (
-                            <span className="text-[9px] font-black uppercase tracking-widest text-accent-green">hoje</span>
-                          )}
+                          <span className={cn(
+                            'text-xs font-semibold',
+                            row.isToday ? 'text-accent-green' : 'text-white/30'
+                          )}>
+                            {row.label}
+                            {row.isToday && <span className="ml-2 text-[9px] font-black uppercase tracking-widest">hoje</span>}
+                          </span>
                         </div>
                       </td>
                       <td className="px-6 py-3.5 text-right">
-                        <span className={cn(
-                          'text-sm font-semibold',
-                          isToday ? 'text-white' : 'text-white/60'
-                        )}>
-                          {formatCurrency(row.bankroll)}
+                        <span className={cn('text-sm font-semibold', row.isToday ? 'text-white' : 'text-white/50')}>
+                          {row.bankroll !== null ? formatCurrency(row.bankroll) : '—'}
                         </span>
                       </td>
                       <td className="px-8 py-3.5 text-right">
-                        <span className={cn(
-                          'text-sm font-black',
-                          isToday ? 'text-accent-green' : isPast ? 'text-white/30' : 'text-white/70'
-                        )}>
-                          {formatCurrency(row.meta)}
-                        </span>
+                        {row.meta !== null ? (
+                          <span className={cn(
+                            'text-sm font-black',
+                            row.isToday ? 'text-accent-green' : isPast ? 'text-white/30' : 'text-white/70'
+                          )}>
+                            {formatCurrency(row.meta)}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-white/20 font-bold uppercase tracking-widest">FDS</span>
+                        )}
                       </td>
                     </tr>
                   )
@@ -232,7 +411,7 @@ export default async function GoalsPage() {
               <tfoot>
                 <tr className="border-t-2 border-white/10 bg-white/[0.02]">
                   <td colSpan={2} className="px-8 py-4 text-xs font-black uppercase tracking-widest text-white/40">
-                    Total projetado em 30 dias
+                    Total projetado ({cycle.op_days_total} dias operacionais)
                   </td>
                   <td className="px-8 py-4 text-right text-base font-black text-accent-green">
                     {formatCurrency(totalMeta)}
@@ -244,8 +423,8 @@ export default async function GoalsPage() {
         </div>
       )}
 
-      {/* ── Alterar Planejamento (colapsável) ── */}
-      <details className="group animate-fade-in">
+      {/* ── Alterar Planejamento ── */}
+      <details className="group animate-fade-in no-print">
         <summary className="glass-card px-8 py-5 border-white/5 flex items-center justify-between cursor-pointer list-none select-none hover:border-white/10 transition-premium rounded-2xl">
           <div className="flex items-center gap-3">
             <Calculator size={18} className="text-accent-blue" />
@@ -253,71 +432,98 @@ export default async function GoalsPage() {
               {goal ? 'Alterar Planejamento' : 'Novo Planejamento'}
             </span>
           </div>
-          <ChevronDown
-            size={18}
-            className="text-white/30 group-open:rotate-180 transition-transform duration-300"
-          />
+          <ChevronDown size={18} className="text-white/30 group-open:rotate-180 transition-transform duration-300" />
         </summary>
-
         <div className="mt-3 glass-card p-8 border-white/5">
           <GoalForm userId={user.id} currentBankroll={effectiveBankroll} />
         </div>
       </details>
 
-      {/* ── Guia Estratégico ── */}
-      <details className="group animate-fade-in">
-        <summary className="glass-card px-8 py-5 border-accent-blue/10 bg-accent-blue/[0.02] flex items-center justify-between cursor-pointer list-none select-none hover:border-accent-blue/20 transition-premium rounded-2xl">
-          <div className="flex items-center gap-3">
-            <Info size={18} className="text-accent-blue" />
-            <span className="text-sm font-bold text-white/60 uppercase tracking-widest">Guia Estratégico</span>
-          </div>
-          <ChevronDown
-            size={18}
-            className="text-white/30 group-open:rotate-180 transition-transform duration-300"
-          />
-        </summary>
+      {/* ── IMPRESSÃO: Plano do Mês (visível apenas ao imprimir) ── */}
+      {goal && cycle && (
+        <div className="print-only">
+          <details className="group">
+            <summary className="print-header cursor-pointer list-none">
+              <h1 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>
+                MetaEdge PRO — Plano do Mês · {monthName.charAt(0).toUpperCase() + monthName.slice(1)}
+              </h1>
+              <p style={{ fontSize: 9, color: '#6b7280', margin: '2px 0 0' }}>
+                {goal.strategy === 'compound' ? 'Juros Compostos' : 'Meta Fixa'} ·
+                Banca inicial: {formatCurrency(goal.initial_bankroll)} ·
+                {goal.daily_percentage}% ao dia ·
+                {goal.play_weekends ? '7 dias/semana' : 'Seg–Sex'}
+              </p>
+            </summary>
 
-        <div className="mt-3 glass-card p-8 border-accent-blue/10 bg-accent-blue/[0.02]">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-8">
-            {[
-              {
-                dot: 'bg-accent-green',
-                label: 'Meta Fixa',
-                desc: 'Divisão linear do lucro projetado pelo tempo total. Ideal para quem já tem um teto de ganhos estabelecido.',
-              },
-              {
-                dot: 'bg-accent-blue',
-                label: 'Juros Compostos',
-                desc: 'Crescimento exponencial onde o lucro vira base para a próxima operação. Acelera o crescimento da banca.',
-              },
-              {
-                dot: 'bg-yellow-400',
-                label: 'Performance',
-                desc: '',
-                items: ['WIN ≥ 100% da meta', 'PARCIAL ≥ 70% da meta', 'LOSS abaixo de 70%'],
-              },
-            ].map(({ dot, label, desc, items }) => (
-              <div key={label} className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <div className={cn('w-2 h-2 rounded-full', dot)} />
-                  <p className="text-xs font-black text-white uppercase tracking-widest">{label}</p>
-                </div>
-                {desc && <p className="text-xs text-white/40 leading-relaxed">{desc}</p>}
-                {items && (
-                  <ul className="space-y-1.5">
-                    {items.map((item) => (
-                      <li key={item} className="flex items-center gap-2 text-xs text-white/30 font-bold uppercase tracking-widest">
-                        <div className={cn('w-1.5 h-1.5 rounded-full', dot)} />
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
-          </div>
+            <table className="print-table">
+              <thead>
+                <tr>
+                  <th>Dia</th>
+                  <th className="right">Meta do Dia</th>
+                  <th className="right">Banca Alvo</th>
+                  <th className="right">Realizado</th>
+                  <th className="right">Δ Diferença</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {printRows.map((row) => {
+                  const delta = (!row.isFuture && row.actual !== null && row.meta !== null)
+                    ? row.actual - row.meta : null
+                  const statusLabel = row.isFuture || !row.isOpDay ? ''
+                    : row.actual === null ? '—'
+                    : delta !== null && delta >= 0 ? '✓ Win'
+                    : delta !== null && delta >= (row.meta ?? 0) * -0.3 ? '~ Parcial'
+                    : '✗ Loss'
+                  return (
+                    <tr
+                      key={row.dateStr}
+                      className={row.isWeekendDay ? 'weekend' : row.isToday ? 'today-row' : ''}
+                    >
+                      <td>{row.label}{row.isToday ? ' ◀' : ''}</td>
+                      <td className="right">
+                        {row.isOpDay ? formatCurrency(row.meta ?? 0) : <span className="print-muted">FDS</span>}
+                      </td>
+                      <td className="right print-muted">
+                        {row.isOpDay ? formatCurrency(row.bankroll ?? 0) : '—'}
+                      </td>
+                      <td className="right">
+                        {!row.isFuture && row.actual !== null
+                          ? formatCurrency(row.actual)
+                          : <span className="print-muted">—</span>}
+                      </td>
+                      <td className={`right ${delta === null ? 'print-muted' : delta >= 0 ? 'print-positive' : 'print-negative'}`}>
+                        {delta !== null
+                          ? `${delta >= 0 ? '+' : ''}${formatCurrency(delta)}`
+                          : '—'}
+                      </td>
+                      <td className={statusLabel.startsWith('✓') ? 'print-positive' : statusLabel.startsWith('✗') ? 'print-negative' : 'print-muted'}>
+                        {statusLabel}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td>TOTAL</td>
+                  <td className="right">{formatCurrency(printTotalMeta)}</td>
+                  <td />
+                  <td className="right">{formatCurrency(printTotalActual)}</td>
+                  <td className={`right ${printDelta >= 0 ? 'print-positive' : 'print-negative'}`}>
+                    {printDelta >= 0 ? '+' : ''}{formatCurrency(printDelta)}
+                  </td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+
+            <p className="print-footer">
+              Impresso em {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })} via MetaEdge PRO
+            </p>
+          </details>
         </div>
-      </details>
+      )}
 
     </div>
   )

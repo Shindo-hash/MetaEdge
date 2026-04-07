@@ -81,7 +81,10 @@ create policy "sessions: own data" on public.sessions
 create index if not exists idx_sessions_user_date on public.sessions(user_id, date desc);
 
 -- ============================================================
--- 4. DAILY PROGRESS (opcional — cache de evolução diária)
+-- 4. DAILY PROGRESS (reservada para uso futuro — cache de evolução diária)
+-- Nota: esta tabela existe no schema mas NÃO é utilizada pela aplicação.
+-- Mantida para possível implementação futura de cache de progresso diário.
+-- ============================================================
 create table if not exists public.daily_progress (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references public.profiles(id) on delete cascade,

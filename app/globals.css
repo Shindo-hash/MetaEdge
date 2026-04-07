@@ -342,7 +342,55 @@ input[type="time"].field-input {
 
 /* ── PRINT ───────────────────────────────────────────── */
 
+.print-only { display: none; }
+
 @media print {
-  body { background: white !important; color: black !important; }
-  .no-print { display: none !important; }
+  @page { size: A4 landscape; margin: 10mm; }
+
+  .no-print   { display: none !important; }
+  .print-only { display: block !important; }
+
+  /* Ocultar sidebar, header e navegação */
+  nav, aside, [class*="sidebar"], [class*="Sidebar"],
+  header, [class*="header"], [class*="Header"] { display: none !important; }
+
+  /* Reset visual */
+  body, html { background: white !important; color: #111 !important; font-family: system-ui, sans-serif; }
+  .glass-card { background: white !important; border: 1px solid #e5e7eb !important; box-shadow: none !important; border-radius: 4px !important; }
+
+  /* Tabelas compactas */
+  .print-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9px;
+    page-break-inside: auto;
+  }
+  .print-table th {
+    background: #f3f4f6;
+    padding: 4px 6px;
+    text-align: left;
+    border-bottom: 1.5px solid #d1d5db;
+    font-weight: 700;
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+  }
+  .print-table th.right,
+  .print-table td.right { text-align: right; }
+  .print-table td {
+    padding: 3px 6px;
+    border-bottom: 1px solid #f3f4f6;
+    page-break-inside: avoid;
+    white-space: nowrap;
+  }
+  .print-table tr.weekend td { color: #9ca3af; }
+  .print-table tr.today-row td { background: #f0fdf4; font-weight: 700; }
+  .print-table tfoot td { background: #f3f4f6; font-weight: 700; border-top: 1.5px solid #d1d5db; padding: 4px 6px; }
+
+  .print-positive { color: #16a34a !important; font-weight: 700; }
+  .print-negative { color: #dc2626 !important; font-weight: 700; }
+  .print-muted    { color: #9ca3af !important; }
+  .print-header { margin-bottom: 10px; border-bottom: 2px solid #111; padding-bottom: 6px; }
+  .print-footer { margin-top: 8px; font-size: 8px; color: #9ca3af; }
 }

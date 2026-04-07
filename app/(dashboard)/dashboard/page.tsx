@@ -1,12 +1,14 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { calculateGoal } from '@/lib/goals'
+import { calculateGoal, countOpDays, getCompoundDailyGoalForOpDay, calcDynamicGoals, calcAlerts } from '@/lib/services/goals'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, resultBg } from '@/lib/utils'
 import StatsCard from '@/components/dashboard/StatsCard'
 import GoalStatus from '@/components/dashboard/GoalStatus'
-import DailyChart from '@/components/dashboard/DailyChart'
-import MonthlyChart from '@/components/dashboard/MonthlyChart'
+import BankrollChart from '@/components/dashboard/BankrollChart'
+import PerformanceChart from '@/components/dashboard/PerformanceChart'
+import WeeklyChart from '@/components/dashboard/WeeklyChart'
+import GoalAlerts from '@/components/dashboard/GoalAlerts'
 import {
   Wallet,
   TrendingUp,
@@ -25,10 +27,11 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [{ data: profile }, { data: sessions }, { data: goal }] = await Promise.all([
+  const [{ data: profile }, { data: sessions }, { data: goal }, { data: cycle }] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', user.id).single(),
     supabase.from('sessions').select('*').eq('user_id', user.id).order('date', { ascending: false }),
     supabase.from('goals').select('*').eq('user_id', user.id).eq('is_active', true).single(),
+    supabase.from('cycles').select('*').eq('user_id', user.id).eq('status', 'active').single(),
   ])
 
   const currentBankroll = profile?.current_bankroll ?? 0
@@ -36,13 +39,123 @@ export default async function DashboardPage() {
   const todayStr = new Date().toISOString().split('T')[0]
   const todaySession = sessions?.find((s) => s.date === todayStr) ?? null
 
-  const goalCalc = goal ? calculateGoal(goal, effectiveBankroll, sessions ?? []) : null
-  const dailyGoal = goalCalc?.dailyGoal ?? 0
+  const goalCalc = goal ? calculateGoal(goal) : null
+
+  // Meta de hoje: compound usa a fórmula do dia operacional N, fixed usa dailyGoal do cycle
+  const pct = (goal?.daily_percentage ?? 0) / 100
+  const todayOpIndex = (cycle && goal)
+    ? countOpDays(cycle.start_date, todayStr, goal.play_weekends)
+    : 0
+  const todayDailyGoal = (goal?.strategy === 'compound' && cycle && todayOpIndex > 0)
+    ? getCompoundDailyGoalForOpDay(goal.initial_bankroll, pct, todayOpIndex)
+    : (goalCalc?.dailyGoal ?? 0)
+
+  // Metas dinâmicas (semanal/mensal baseadas no calendário real)
+  const dynamicGoals = (goal && cycle)
+    ? calcDynamicGoals(goal, cycle.start_date, todayStr, cycle.daily_goal_fixed ?? 0)
+    : null
+
+  // Lucro acumulado no ciclo e alertas
+  const cycleProfit = sessions?.filter(s => cycle && s.date >= cycle.start_date)
+    .reduce((acc, s) => acc + s.profit, 0) ?? 0
+  const weekProfit = (dynamicGoals && sessions)
+    ? sessions.filter(s => s.date >= dynamicGoals.weekStartStr && s.date <= dynamicGoals.weekEndStr)
+        .reduce((acc, s) => acc + s.profit, 0)
+    : 0
+  const todayProfit = todaySession?.profit ?? null
+  const alerts = (goal && dynamicGoals)
+    ? calcAlerts(todayProfit, cycleProfit, todayDailyGoal, dynamicGoals.weeklyGoal, dynamicGoals.monthlyGoal)
+    : []
 
   const totalProfit = sessions?.reduce((acc, s) => acc + s.profit, 0) ?? 0
   const winCount = sessions?.filter((s) => s.result === 'win').length ?? 0
   const totalSessions = sessions?.length ?? 0
   const winRate = totalSessions > 0 ? Math.round((winCount / totalSessions) * 100) : 0
+
+  // ── Gerar pontos para gráficos (real vs meta) ──────────────
+  type ChartPoint = { date: string; real: number; expected: number; delta: number }
+  type WeeklyPoint = { week: string; target: number; actual: number }
+
+  const chartPoints: ChartPoint[] = []
+  const weeklyPoints: WeeklyPoint[] = []
+
+  if (goal && cycle) {
+    const [cycleY, cycleM] = cycle.start_date.split('-').map(Number)
+    const lastDay = new Date(cycleY, cycleM, 0).getDate()
+    const sessionMap = Object.fromEntries((sessions ?? []).map(s => [s.date, s]))
+
+    let opDayIndex = 0
+    let runningBankroll = goal.initial_bankroll
+
+    // Acumuladores por semana
+    let currentWeekNum = 0
+    let weekTarget = 0
+    let weekActual = 0
+    let weekLabel = ''
+    let weekFirstOpDay = 0
+
+    for (let d = 1; d <= lastDay; d++) {
+      const dateStr = `${String(cycleY)}-${String(cycleM).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+      if (dateStr > todayStr) break
+
+      const dateObj = new Date(dateStr + 'T00:00:00')
+      const dow = dateObj.getDay()
+      const isWeekend = dow === 0 || dow === 6
+      if (!goal.play_weekends && isWeekend) continue
+
+      opDayIndex++
+
+      // Banca esperada no final deste dia operacional
+      const expected = goal.strategy === 'compound'
+        ? goal.initial_bankroll * Math.pow(1 + pct, opDayIndex)
+        : goal.initial_bankroll + (cycle.daily_goal_fixed ?? 0) * opDayIndex
+
+      // Meta diária deste dia
+      const dailyMetaThisDay = goal.strategy === 'compound'
+        ? getCompoundDailyGoalForOpDay(goal.initial_bankroll, pct, opDayIndex)
+        : (cycle.daily_goal_fixed ?? 0)
+
+      // Banca real: usa final_bankroll da sessão se existir, senão mantém a anterior
+      const session = sessionMap[dateStr]
+      if (session) runningBankroll = session.final_bankroll
+
+      chartPoints.push({
+        date: dateStr,
+        real: runningBankroll,
+        expected,
+        delta: runningBankroll - expected,
+      })
+
+      // Agrupamento semanal: semana fecha na sexta (dow=5) ou domingo (dow=0 com FDS)
+      const closesWeek = goal.play_weekends ? dow === 0 : dow === 5
+      const isoWeekNum = Math.floor((dateObj.getTime() - new Date(cycleY, cycleM - 1, 1).getTime()) / (7 * 86400000))
+
+      if (weekFirstOpDay === 0 || isoWeekNum !== currentWeekNum) {
+        // Flush semana anterior
+        if (weekLabel) weeklyPoints.push({ week: weekLabel, target: weekTarget, actual: weekActual })
+        currentWeekNum = isoWeekNum
+        weekTarget = 0
+        weekActual = 0
+        weekLabel = `S${weeklyPoints.length + 1}`
+        weekFirstOpDay = opDayIndex
+      }
+
+      weekTarget += dailyMetaThisDay
+      weekActual += session?.profit ?? 0
+
+      if (closesWeek || dateStr === todayStr) {
+        // flush se for o último dia que temos dados
+        if (d === lastDay || dateStr === todayStr) {
+          weeklyPoints.push({ week: weekLabel, target: weekTarget, actual: weekActual })
+          weekLabel = '' // evitar flush duplo
+        } else if (closesWeek) {
+          weeklyPoints.push({ week: weekLabel, target: weekTarget, actual: weekActual })
+          weekLabel = ''
+          weekFirstOpDay = 0
+        }
+      }
+    }
+  }
 
   return (
     <div className="space-y-10 max-w-6xl mx-auto pb-12">
@@ -63,6 +176,8 @@ export default async function DashboardPage() {
         </div>
         {todaySession && <GoalStatus result={todaySession.result} />}
       </div>
+
+      {alerts.length > 0 && <GoalAlerts alerts={alerts} />}
 
       {/* ── Card de Meta Diária ── */}
       {goal && goalCalc ? (
@@ -87,12 +202,12 @@ export default async function DashboardPage() {
                   </p>
                   <div className="flex items-end gap-4">
                     <p className="text-4xl font-black text-accent-green tracking-tighter leading-none">
-                      {formatCurrency(dailyGoal)}
+                      {formatCurrency(todayDailyGoal)}
                     </p>
                     <div className="mb-1 flex flex-col items-start">
                       <span className="text-[10px] uppercase tracking-widest text-white/30 font-bold leading-none mb-1">parar com</span>
                       <span className="text-base font-bold text-white/60 leading-none">
-                        {formatCurrency(effectiveBankroll + dailyGoal)}
+                        {formatCurrency(effectiveBankroll + todayDailyGoal)}
                       </span>
                     </div>
                     <ArrowUpRight className="text-accent-green/40 mb-1" size={20} />
@@ -111,12 +226,30 @@ export default async function DashboardPage() {
               {/* Direita — metas semanal/mensal */}
               <div className="grid grid-cols-2 gap-10 md:text-right flex-shrink-0">
                 <div>
-                  <p className="text-xs uppercase tracking-widest text-white/30 font-bold mb-2">Meta Semanal</p>
-                  <p className="text-2xl font-black text-white tracking-tight">{formatCurrency(goalCalc.weeklyGoal)}</p>
+                  <p className="text-xs uppercase tracking-widest text-white/30 font-bold mb-2">
+                    {dynamicGoals ? `Semana ${dynamicGoals.currentWeekNumber}` : 'Meta Semanal'}
+                  </p>
+                  <p className="text-2xl font-black text-white tracking-tight">
+                    {formatCurrency(dynamicGoals?.weeklyGoal ?? goalCalc.weeklyGoal)}
+                  </p>
+                  {dynamicGoals && (
+                    <p className={cn(
+                      'text-xs mt-1.5 font-bold',
+                      weekProfit >= dynamicGoals.weeklyGoal
+                        ? 'text-accent-green'
+                        : weekProfit >= dynamicGoals.weeklyGoal * 0.8
+                        ? 'text-yellow-400'
+                        : 'text-white/35'
+                    )}>
+                      {formatCurrency(weekProfit)} acumulado
+                    </p>
+                  )}
                 </div>
                 <div>
                   <p className="text-xs uppercase tracking-widest text-white/30 font-bold mb-2">Meta Mensal</p>
-                  <p className="text-2xl font-black text-white tracking-tight">{formatCurrency(goalCalc.monthlyGoal)}</p>
+                  <p className="text-2xl font-black text-white tracking-tight">
+                    {formatCurrency(dynamicGoals?.monthlyGoal ?? goalCalc.monthlyGoal)}
+                  </p>
                 </div>
               </div>
             </div>
@@ -203,31 +336,48 @@ export default async function DashboardPage() {
         />
       </div>
 
-      {/* ── Charts ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-fade-in">
-        <div className="glass-card p-10 border-white/5">
+      {/* ── Gráficos ── */}
+      <div className="space-y-8 animate-fade-in">
+        {/* BankrollChart: Real vs Meta */}
+        <div className="glass-card p-8 md:p-10 border-white/5">
           <div className="flex items-center justify-between mb-8">
             <div>
-              <h3 className="text-sm font-bold text-white">Evolução Diária</h3>
-              <p className="text-xs text-white/30 mt-0.5">Últimas 14 sessões</p>
+              <h3 className="text-sm font-bold text-white">Banca Real vs Meta</h3>
+              <p className="text-xs text-white/30 mt-0.5">Evolução diária do ciclo atual</p>
             </div>
             <div className="w-9 h-9 rounded-xl bg-accent-green/8 border border-accent-green/15 flex items-center justify-center">
               <TrendingUp size={16} className="text-accent-green" />
             </div>
           </div>
-          <DailyChart sessions={sessions ?? []} />
+          <BankrollChart points={chartPoints} />
         </div>
-        <div className="glass-card p-10 border-white/5">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h3 className="text-sm font-bold text-white">Lucro por Mês</h3>
-              <p className="text-xs text-white/30 mt-0.5">Últimos 6 meses</p>
+
+        {/* PerformanceChart + WeeklyChart lado a lado */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="glass-card p-8 md:p-10 border-white/5">
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <h3 className="text-sm font-bold text-white">Performance vs Esperado</h3>
+                <p className="text-xs text-white/30 mt-0.5">Delta diário (real − projetado)</p>
+              </div>
+              <div className="w-9 h-9 rounded-xl bg-accent-blue/8 border border-accent-blue/15 flex items-center justify-center">
+                <ArrowUpRight size={16} className="text-accent-blue" />
+              </div>
             </div>
-            <div className="w-9 h-9 rounded-xl bg-accent-blue/8 border border-accent-blue/15 flex items-center justify-center">
-              <ArrowUpRight size={16} className="text-accent-blue" />
-            </div>
+            <PerformanceChart points={chartPoints} />
           </div>
-          <MonthlyChart sessions={sessions ?? []} />
+          <div className="glass-card p-8 md:p-10 border-white/5">
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <h3 className="text-sm font-bold text-white">Meta Semanal</h3>
+                <p className="text-xs text-white/30 mt-0.5">Realizado vs alvo por semana</p>
+              </div>
+              <div className="w-9 h-9 rounded-xl bg-white/5 border border-white/8 flex items-center justify-center">
+                <CheckCircle2 size={16} className="text-white/40" />
+              </div>
+            </div>
+            <WeeklyChart points={weeklyPoints} />
+          </div>
         </div>
       </div>
 

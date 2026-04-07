@@ -12,6 +12,7 @@ import {
   Wallet,
   LogOut,
   ChevronRight,
+  BookOpen,
 } from 'lucide-react'
 
 const navItems = [
@@ -19,6 +20,7 @@ const navItems = [
   { label: 'Sessões',    href: '/sessions',  icon: ClipboardList },
   { label: 'Metas',      href: '/goals',     icon: Target },
   { label: 'Carteira',   href: '/wallet',    icon: Wallet },
+  { label: 'Histórico',  href: '/historico', icon: BookOpen },
 ]
 
 export default function Sidebar({ userName }: { userName: string }) {

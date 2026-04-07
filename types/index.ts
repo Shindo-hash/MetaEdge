@@ -33,19 +33,43 @@ export type Goal = {
   created_at: string
 }
 
-export type DailyProgress = {
-  id: string
-  user_id: string
-  date: string
-  bankroll: number
-  daily_goal: number
-  result: 'win' | 'loss' | 'partial' | null
-}
-
 export type GoalCalc = {
   dailyGoal: number
   weeklyGoal: number
   monthlyGoal: number
+}
+
+export type Cycle = {
+  id: string
+  user_id: string
+  goal_id: string
+  year: number
+  month: number
+  start_date: string
+  end_date: string | null
+  initial_bankroll: number
+  daily_goal_fixed: number
+  op_days_total: number
+  status: 'active' | 'closed'
+  created_at: string
+}
+
+export type MonthlyHistory = {
+  id: string
+  user_id: string
+  cycle_id: string
+  year: number
+  month: number
+  initial_bankroll: number
+  final_bankroll: number
+  total_profit: number
+  return_pct: number
+  daily_goal_fixed: number
+  op_days_total: number
+  days_operated: number
+  days_positive: number
+  days_negative: number
+  created_at: string
 }
 
 export type Transaction = {

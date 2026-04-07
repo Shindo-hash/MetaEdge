@@ -26,7 +26,33 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
     setSuccess(false)
     const supabase = createClient()
 
-    await supabase.from('goals').update({ is_active: false }).eq('user_id', userId)
+    // MELHORIA 4 — confirmar substituição de meta ativa
+    const { data: existingGoal } = await supabase
+      .from('goals')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .single()
+
+    if (existingGoal) {
+      const confirmed = confirm('Você já tem uma meta ativa. Deseja substituí-la pela nova configuração?')
+      if (!confirmed) {
+        setLoading(false)
+        return
+      }
+    }
+
+    // BUG 4 — capturar erro ao desativar e abortar antes do insert
+    const { error: deactivateError } = await supabase
+      .from('goals')
+      .update({ is_active: false })
+      .eq('user_id', userId)
+
+    if (deactivateError) {
+      setError('Erro ao desativar meta anterior: ' + deactivateError.message)
+      setLoading(false)
+      return
+    }
 
     const { error: insertError } = await supabase.from('goals').insert({
       user_id: userId,
@@ -40,7 +66,21 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
       is_active: true,
     })
 
-    if (insertError) { setError(insertError.message) } else { setSuccess(true); router.refresh() }
+    if (insertError) {
+      // BUG 4 — rollback: reativar a última meta se o insert falhar
+      await supabase
+        .from('goals')
+        .update({ is_active: true })
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+      setError(insertError.message)
+      setLoading(false)
+      return
+    }
+
+    setSuccess(true)
+    router.refresh()
     setLoading(false)
   }
 

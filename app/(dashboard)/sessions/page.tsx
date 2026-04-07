@@ -1,9 +1,12 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { calculateGoal } from '@/lib/goals'
-import { formatCurrency, formatDate, resultBg } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import SessionForm from '@/components/sessions/SessionForm'
 import GoalStatus from '@/components/dashboard/GoalStatus'
+import DeleteSessionButton from '@/components/sessions/DeleteSessionButton'
+import PrintButton from '@/components/PrintButton'
+import { ensureCycleForCurrentMonth } from '@/lib/services/cycles'
+import { countOpDays, getCompoundDailyGoalForOpDay } from '@/lib/services/goals'
 import { ClipboardList, History, PlusCircle, ArrowRightLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -18,10 +21,28 @@ export default async function SessionsPage() {
     supabase.from('goals').select('*').eq('user_id', user.id).eq('is_active', true).single(),
   ])
 
-  const currentBankroll = profile?.current_bankroll ?? 0
+  const currentBankroll   = profile?.current_bankroll ?? 0
   const effectiveBankroll = currentBankroll > 0 ? currentBankroll : (goal?.initial_bankroll ?? 0)
-  const goalCalc = goal ? calculateGoal(goal, effectiveBankroll, sessions ?? []) : null
-  const dailyGoal = goalCalc?.dailyGoal ?? 0
+  const todayStr = new Date().toISOString().split('T')[0]
+
+  // Meta diária correta: compound usa a fórmula do dia operacional atual
+  let dailyGoal = 0
+  if (goal) {
+    try {
+      const cycle = await ensureCycleForCurrentMonth(
+        supabase, user.id, goal, sessions ?? [], currentBankroll
+      )
+      if (goal.strategy === 'compound') {
+        const pct = (goal.daily_percentage ?? 0) / 100
+        const todayOpIndex = countOpDays(cycle.start_date, todayStr, goal.play_weekends)
+        dailyGoal = todayOpIndex > 0
+          ? getCompoundDailyGoalForOpDay(goal.initial_bankroll, pct, todayOpIndex)
+          : goal.initial_bankroll * pct
+      } else {
+        dailyGoal = cycle.daily_goal_fixed
+      }
+    } catch (_) { /* sem ciclo */ }
+  }
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto pb-10">
@@ -54,12 +75,16 @@ export default async function SessionsPage() {
               <History size={18} className="text-accent-blue" />
               <h3 className="text-base font-bold text-white uppercase tracking-widest">Histórico detalhado</h3>
             </div>
-            <span className="text-[10px] bg-white/5 px-2 py-1 rounded-full text-white/40 font-bold uppercase tracking-widest">
-              {sessions.length} registros
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="no-print text-[10px] bg-white/5 px-2 py-1 rounded-full text-white/40 font-bold uppercase tracking-widest">
+                {sessions.length} registros
+              </span>
+              <PrintButton label="Imprimir Histórico" />
+            </div>
           </div>
 
-          <div className="space-y-3">
+          {/* Lista visual (tela) */}
+          <div className="space-y-3 no-print">
             {sessions.map((session) => (
               <div
                 key={session.id}
@@ -88,8 +113,67 @@ export default async function SessionsPage() {
                     {session.profit >= 0 ? '+' : ''}{formatCurrency(session.profit)}
                   </span>
                 </div>
+                <DeleteSessionButton sessionId={session.id} userId={user.id} />
               </div>
             ))}
+          </div>
+
+          {/* Tabela de impressão (apenas no print) */}
+          <div className="print-only">
+            <div className="print-header">
+              <h1 style={{ fontSize: 15, fontWeight: 800, margin: 0 }}>MetaEdge PRO — Histórico de Sessões</h1>
+              <p style={{ fontSize: 9, color: '#6b7280', margin: '2px 0 0' }}>
+                {sessions.length} sessões registradas ·
+                Impresso em {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+              </p>
+            </div>
+            <table className="print-table">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Início</th>
+                  <th>Fim</th>
+                  <th className="right">Banca Inicial</th>
+                  <th className="right">Banca Final</th>
+                  <th className="right">Profit</th>
+                  <th>Resultado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.map((session) => (
+                  <tr key={session.id}>
+                    <td>{formatDate(session.date)}</td>
+                    <td className="print-muted">{session.start_time ?? '—'}</td>
+                    <td className="print-muted">{session.end_time ?? '—'}</td>
+                    <td className="right print-muted">{formatCurrency(session.initial_bankroll)}</td>
+                    <td className="right">{formatCurrency(session.final_bankroll)}</td>
+                    <td className={`right ${session.profit >= 0 ? 'print-positive' : 'print-negative'}`}>
+                      {session.profit >= 0 ? '+' : ''}{formatCurrency(session.profit)}
+                    </td>
+                    <td className={
+                      session.result === 'win' ? 'print-positive'
+                      : session.result === 'loss' ? 'print-negative'
+                      : 'print-muted'
+                    }>
+                      {session.result === 'win' ? '✓ Win' : session.result === 'loss' ? '✗ Loss' : '~ Parcial'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={5}>TOTAL ({sessions.length} sessões)</td>
+                  <td className={`right ${sessions.reduce((s, x) => s + x.profit, 0) >= 0 ? 'print-positive' : 'print-negative'}`}>
+                    {(() => {
+                      const t = sessions.reduce((s, x) => s + x.profit, 0)
+                      return `${t >= 0 ? '+' : ''}${formatCurrency(t)}`
+                    })()}
+                  </td>
+                  <td>{sessions.filter(s => s.result === 'win').length} wins</td>
+                </tr>
+              </tfoot>
+            </table>
+            <p className="print-footer">MetaEdge PRO</p>
           </div>
         </div>
       )}

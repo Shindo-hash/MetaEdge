@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { calcSessionResult } from '@/lib/goals'
+import { calcSessionResult } from '@/lib/services/goals'
 import { formatCurrency } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 
@@ -33,10 +33,35 @@ export default function SessionForm({ dailyGoal, currentBankroll, userId }: Prop
     setError(null)
     const supabase = createClient()
 
+    // SUGESTÃO 4 — validar horários
+    if (startTime && endTime && startTime >= endTime) {
+      setError('A hora de início deve ser anterior à hora de fim.')
+      setLoading(false)
+      return
+    }
+
+    // BUG 5 — bloquear sessão duplicada na mesma data
+    const { data: existing } = await supabase
+      .from('sessions')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('date', date)
+      .single()
+
+    if (existing) {
+      setError('Já existe uma sessão registrada para esta data. Edite ou exclua a sessão existente.')
+      setLoading(false)
+      return
+    }
+
     const initial = Number(initialBankroll)
     const final = Number(finalBankroll)
     const calculatedProfit = final - initial
-    const calculatedResult = calcSessionResult(final, initial, dailyGoal)
+
+    // BUG 3 — evitar resultado errado quando não há meta
+    const calculatedResult = dailyGoal > 0
+      ? calcSessionResult(final, initial, dailyGoal)
+      : calculatedProfit >= 0 ? 'win' : 'loss'
 
     const { error: insertError } = await supabase.from('sessions').insert({
       user_id: userId, date, start_time: startTime, end_time: endTime,
@@ -107,6 +132,13 @@ export default function SessionForm({ dailyGoal, currentBankroll, userId }: Prop
             )}>
               {profit >= 0 ? '+' : ''}{formatCurrency(profit)}
             </span>
+            {/* MELHORIA 3 — mostrar banca-alvo e alvo parcial */}
+            {dailyGoal > 0 && (
+              <p className="text-xs text-white/30 mt-1">
+                Meta: <span className="text-white/60 font-bold">{formatCurrency(Number(initialBankroll) + dailyGoal)}</span>
+                {' '}· Parcial: <span className="text-white/60 font-bold">{formatCurrency(Number(initialBankroll) + dailyGoal * 0.7)}</span>
+              </p>
+            )}
           </div>
           <span className={cn(
             'text-xs font-black px-3 py-1.5 rounded-full border uppercase tracking-widest',
