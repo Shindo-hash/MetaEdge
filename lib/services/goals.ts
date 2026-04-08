@@ -113,29 +113,27 @@ export function calcSessionResult(
 // ── METAS DINÂMICAS (semanal/mensal baseadas no calendário real) ──
 
 export type DynamicGoals = {
-  dailyGoal:         number
-  weeklyGoal:        number
-  monthlyGoal:       number
-  currentWeekNumber: number
-  totalOpDays:       number
-  todayOpIndex:      number
-  weekStartStr:      string  // segunda-feira da semana atual (YYYY-MM-DD)
-  weekEndStr:        string  // domingo da semana atual (YYYY-MM-DD)
+  dailyGoal:            number
+  weeklyGoal:           number        // soma das metas diárias da semana (lucro esperado)
+  monthlyGoal:          number        // lucro total do mês
+  weeklyTargetFull:     number        // banca-alvo ao fim da semana
+  monthlyTargetFull:    number        // banca-alvo ao fim do mês
+  weeklyExpectedSoFar:  number        // lucro esperado até HOJE dentro da semana
+  currentWeekNumber:    number
+  totalOpDays:          number
+  todayOpIndex:         number
+  weekFirstOpDay:       number
+  weekLastOpDay:        number
+  weekStartStr:         string
+  weekEndStr:           string
 }
 
 /**
  * Calcula meta diária, semanal e mensal com base no calendário real do mês.
  *
- * Compound:
- *   dailyGoal  = initial × (1+pct)^(todayOpIndex-1) × pct
- *   weeklyGoal = initial × (1+pct)^(s-1) × ((1+pct)^n - 1)
- *                onde s = 1º opDay da semana atual, n = opDays na semana
- *   monthlyGoal = initial × ((1+pct)^totalOpDays - 1)
- *
- * Fixed:
- *   dailyGoal   = dailyGoalFixed
- *   weeklyGoal  = dailyGoalFixed × opDaysInWeek
- *   monthlyGoal = dailyGoalFixed × totalOpDays
+ * weeklyTargetFull = banca ao fim da semana = initial × (1+pct)^weekLastOpDay
+ * weeklyExpectedSoFar = lucro esperado até hoje na semana =
+ *   initial × (1+pct)^todayOpIndex - initial × (1+pct)^(weekFirstOpDay-1)
  */
 export function calcDynamicGoals(
   goal: Goal,
@@ -150,15 +148,13 @@ export function calcDynamicGoals(
   const [todayY, todayM] = todayStr.split('-').map(Number)
   const lastDay = new Date(todayY, todayM, 0).getDate()
 
-  // Dia de início efetivo: o maior entre início do ciclo e dia 1 do mês atual
   const cycleStart  = new Date(cycleStartDate + 'T00:00:00')
   const monthStart  = new Date(todayY, todayM - 1, 1)
   const effectiveStart = cycleStart > monthStart ? cycleStart : monthStart
 
-  // Semana ISO da data fornecida: segunda-feira como início
   const todayDate   = new Date(todayStr + 'T00:00:00')
-  const dowToday    = todayDate.getDay()                     // 0=dom..6=sáb
-  const mondayOffset = (dowToday + 6) % 7                   // dias desde segunda
+  const dowToday    = todayDate.getDay()
+  const mondayOffset = (dowToday + 6) % 7
   const weekMonday  = new Date(todayDate)
   weekMonday.setDate(todayDate.getDate() - mondayOffset)
   const weekSunday  = new Date(weekMonday)
@@ -166,8 +162,9 @@ export function calcDynamicGoals(
 
   let totalOpDays    = 0
   let todayOpIndex   = 0
-  let weekFirstOpDay = 0   // 1-based, primeiro opDay da semana atual
-  let weekOpDays     = 0   // quantos opDays na semana atual
+  let weekFirstOpDay = 0
+  let weekLastOpDay  = 0
+  let weekOpDays     = 0
 
   for (let d = 1; d <= lastDay; d++) {
     const date = new Date(todayY, todayM - 1, d)
@@ -182,52 +179,80 @@ export function calcDynamicGoals(
     const dateStr = `${todayY}-${String(todayM).padStart(2, '0')}-${String(d).padStart(2, '0')}`
     if (dateStr <= todayStr) todayOpIndex = totalOpDays
 
-    // Pertence à semana atual (seg a dom, clamped ao mês)?
     if (date >= weekMonday && date <= weekSunday) {
       if (weekFirstOpDay === 0) weekFirstOpDay = totalOpDays
+      weekLastOpDay = totalOpDays
       weekOpDays++
     }
   }
 
-  // Fallbacks
   if (weekFirstOpDay === 0) weekFirstOpDay = 1
-  if (weekOpDays === 0)     weekOpDays     = 1
+  if (weekLastOpDay === 0)  weekLastOpDay  = 1
   if (todayOpIndex === 0)   todayOpIndex   = 1
 
-  // Número da semana atual dentro do mês (1-based, ISO: semana começa na segunda)
-  // Acha a segunda-feira da primeira semana que contém o dia 1 do mês
   const firstOfMonth  = new Date(todayY, todayM - 1, 1)
-  const firstDow      = firstOfMonth.getDay()                  // 0=dom..6=sáb
-  const firstMonOffset = (firstDow + 6) % 7                   // dias desde segunda
+  const firstDow      = firstOfMonth.getDay()
+  const firstMonOffset = (firstDow + 6) % 7
   const firstWeekMonday = new Date(firstOfMonth)
   firstWeekMonday.setDate(firstOfMonth.getDate() - firstMonOffset)
   const currentWeekNumber = Math.floor(
     (weekMonday.getTime() - firstWeekMonday.getTime()) / (7 * 24 * 3600 * 1000)
   ) + 1
 
-  // Datas string da semana atual (para filtrar sessões)
   const fmt = (d: Date) => d.toISOString().split('T')[0]
   const weekStartStr = fmt(weekMonday)
   const weekEndStr   = fmt(weekSunday)
 
-  // Cálculo por estratégia
-  let dailyGoal:  number
-  let weeklyGoal: number
-  let monthlyGoal: number
+  let dailyGoal:            number
+  let weeklyGoal:           number
+  let monthlyGoal:          number
+  let weeklyTargetFull:     number
+  let monthlyTargetFull:    number
+  let weeklyExpectedSoFar:  number
 
   if (strategy === 'compound') {
     dailyGoal   = getCompoundDailyGoalForOpDay(initial, pct, todayOpIndex)
-    // closed-form: soma das metas da semana = initial × (1+pct)^(s-1) × ((1+pct)^n - 1)
     weeklyGoal  = initial * Math.pow(1 + pct, weekFirstOpDay - 1) * (Math.pow(1 + pct, weekOpDays) - 1)
     monthlyGoal = initial * (Math.pow(1 + pct, totalOpDays) - 1)
+
+    // Banca-alvo ao fim da semana = initial × (1+pct)^weekLastOpDay
+    weeklyTargetFull = initial * Math.pow(1 + pct, weekLastOpDay)
+    
+    // Banca-alvo ao fim do mês = initial × (1+pct)^totalOpDays
+    monthlyTargetFull = initial * Math.pow(1 + pct, totalOpDays)
+
+    // Lucro esperado até hoje na semana = banca hoje - banca no início da semana
+    const bankAtWeekStart = initial * Math.pow(1 + pct, weekFirstOpDay - 1)
+    const bankAtToday     = initial * Math.pow(1 + pct, todayOpIndex)
+    weeklyExpectedSoFar   = bankAtToday - bankAtWeekStart
+
   } else {
     const dg    = dailyGoalFixed || (goalCalcFixed(goal)?.dailyGoal ?? 0)
     dailyGoal   = dg
     weeklyGoal  = dg * weekOpDays
     monthlyGoal = dg * totalOpDays
+
+    // Fixed: banca alvo = initial + (meta diária × op days)
+    weeklyTargetFull    = initial + (dg * weekLastOpDay)
+    monthlyTargetFull   = initial + (dg * totalOpDays)
+    weeklyExpectedSoFar = dg * (todayOpIndex - (weekFirstOpDay - 1))
   }
 
-  return { dailyGoal, weeklyGoal, monthlyGoal, currentWeekNumber, totalOpDays, todayOpIndex, weekStartStr, weekEndStr }
+  return {
+    dailyGoal,
+    weeklyGoal,
+    monthlyGoal,
+    weeklyTargetFull,
+    monthlyTargetFull,
+    weeklyExpectedSoFar,
+    currentWeekNumber,
+    totalOpDays,
+    todayOpIndex,
+    weekFirstOpDay,
+    weekLastOpDay,
+    weekStartStr,
+    weekEndStr,
+  }
 }
 
 // Helper interno para fixed sem ciclo
@@ -247,26 +272,31 @@ export type GoalAlert  = { level: AlertLevel; message: string }
 /**
  * Calcula alertas ativos.
  * todayProfit = lucro da sessão de hoje (não banca acumulada).
- * accumulatedProfit = lucro total do ciclo.
+ * currentBankroll = banca atual (para validar meta semanal/mensal).
+ * weeklyTargetFull = banca-alvo ao fim da semana.
+ * monthlyTargetFull = banca-alvo ao fim do mês (initial × (1+pct)^totalOpDays).
  */
 export function calcAlerts(
   todayProfit: number | null,
-  accumulatedProfit: number,
+  currentBankroll: number,
   todayDailyGoal: number,
-  weeklyGoal: number,
-  monthlyGoal: number,
+  weeklyTargetFull: number,   // banca-alvo ao fim da semana
+  monthlyTargetFull: number,  // banca-alvo ao fim do mês
 ): GoalAlert[] {
   const alerts: GoalAlert[] = []
 
+  // Alerta diário — usa lucro do dia
   if (todayProfit !== null && todayDailyGoal > 0 && todayProfit >= todayDailyGoal) {
     alerts.push({ level: 'daily', message: 'Meta do dia atingida. Pare por hoje.' })
   }
 
-  if (weeklyGoal > 0 && accumulatedProfit >= weeklyGoal) {
+  // Alerta semanal — usa banca atual vs banca-alvo da sexta
+  if (weeklyTargetFull > 0 && currentBankroll >= weeklyTargetFull) {
     alerts.push({ level: 'weekly', message: 'Meta semanal atingida.' })
   }
 
-  if (monthlyGoal > 0 && accumulatedProfit >= monthlyGoal) {
+  // Alerta mensal — usa banca atual vs banca-alvo do mês
+  if (monthlyTargetFull > 0 && currentBankroll >= monthlyTargetFull) {
     alerts.push({ level: 'monthly', message: 'Meta mensal atingida. Considere encerrar e sacar.' })
   }
 

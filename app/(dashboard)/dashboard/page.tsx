@@ -63,8 +63,26 @@ export default async function DashboardPage() {
         .reduce((acc, s) => acc + s.profit, 0)
     : 0
   const todayProfit = todaySession?.profit ?? null
+  
+  // Verificar se meta diária foi atingida
+  const isDailyGoalMet = todayProfit !== null && todayDailyGoal > 0 && todayProfit >= todayDailyGoal
+  
+  // Calcular próxima meta (amanhã)
+  const nextDailyGoal = (goal && cycle && isDailyGoalMet)
+    ? (goal.strategy === 'compound'
+        ? getCompoundDailyGoalForOpDay(goal.initial_bankroll, pct, todayOpIndex + 1)
+        : (cycle.daily_goal_fixed ?? todayDailyGoal))
+    : null
+  
+  // Alertas: semanal/mensal agora usam banca atual vs banca-alvo (não lucro acumulado)
   const alerts = (goal && dynamicGoals)
-    ? calcAlerts(todayProfit, cycleProfit, todayDailyGoal, dynamicGoals.weeklyGoal, dynamicGoals.monthlyGoal)
+    ? calcAlerts(
+        todayProfit,
+        currentBankroll,                    // banca atual para validar semanal/mensal
+        todayDailyGoal,
+        dynamicGoals.weeklyTargetFull,      // banca-alvo da sexta
+        dynamicGoals.monthlyTargetFull      // banca-alvo do mês
+      )
     : []
 
   const totalProfit = sessions?.reduce((acc, s) => acc + s.profit, 0) ?? 0
@@ -193,33 +211,67 @@ export default async function DashboardPage() {
 
               {/* Esquerda — valor principal */}
               <div className="flex items-center gap-6">
-                <div className="hidden sm:flex w-20 h-20 rounded-3xl bg-gradient-to-br from-accent-green/20 to-accent-blue/15 items-center justify-center border border-accent-green/25 neon-glow-green flex-shrink-0">
-                  <Target className="text-accent-green" size={38} />
+                <div className={cn(
+                  "hidden sm:flex w-20 h-20 rounded-3xl items-center justify-center border flex-shrink-0 transition-all",
+                  isDailyGoalMet
+                    ? "bg-accent-green/30 border-accent-green/40 neon-glow-green"
+                    : "bg-gradient-to-br from-accent-green/20 to-accent-blue/15 border-accent-green/25 neon-glow-green"
+                )}>
+                  {isDailyGoalMet ? (
+                    <CheckCircle2 className="text-accent-green" size={42} />
+                  ) : (
+                    <Target className="text-accent-green" size={38} />
+                  )}
                 </div>
                 <div>
-                  <p className="text-xs uppercase tracking-[0.22em] text-white/40 font-black mb-3">
-                    Objetivo Diário
-                  </p>
-                  <div className="flex items-end gap-4">
-                    <p className="text-4xl font-black text-accent-green tracking-tighter leading-none">
-                      {formatCurrency(todayDailyGoal)}
-                    </p>
-                    <div className="mb-1 flex flex-col items-start">
-                      <span className="text-[10px] uppercase tracking-widest text-white/30 font-bold leading-none mb-1">parar com</span>
-                      <span className="text-base font-bold text-white/60 leading-none">
-                        {formatCurrency(effectiveBankroll + todayDailyGoal)}
-                      </span>
-                    </div>
-                    <ArrowUpRight className="text-accent-green/40 mb-1" size={20} />
-                  </div>
-                  <div className="flex items-center gap-2 mt-4">
-                    <span className="text-xs px-3 py-1 rounded-full bg-white/6 border border-white/10 text-white/55 font-bold uppercase tracking-wider">
-                      {goal.strategy === 'fixed' ? 'Estratégia Fixa' : 'Juros Compostos'}
-                    </span>
-                    <span className="text-xs px-3 py-1 rounded-full bg-white/6 border border-white/10 text-white/55 font-bold uppercase tracking-wider">
-                      {goal.play_weekends ? '7 dias/semana' : 'Seg a Sex'}
-                    </span>
-                  </div>
+                  {isDailyGoalMet ? (
+                    <>
+                      <p className="text-xs uppercase tracking-[0.22em] text-accent-green font-black mb-3 flex items-center gap-2">
+                        <CheckCircle2 size={14} />
+                        Objetivo diário concluído
+                      </p>
+                      <p className="text-2xl font-black text-white tracking-tight leading-none mb-1">
+                        Parabéns!!
+                      </p>
+                      <p className="text-lg font-bold text-white/70 tracking-tight leading-none mb-2">
+                        Volte amanhã.
+                      </p>
+                      {nextDailyGoal !== null && (
+                        <div className="flex items-center gap-2 mt-3">
+                          <span className="text-xs text-white/40">Próxima meta:</span>
+                          <span className="text-sm font-black text-accent-green">
+                            {formatCurrency(nextDailyGoal)}
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs uppercase tracking-[0.22em] text-white/40 font-black mb-3">
+                        Objetivo Diário
+                      </p>
+                      <div className="flex items-end gap-4">
+                        <p className="text-4xl font-black text-accent-green tracking-tighter leading-none">
+                          {formatCurrency(todayDailyGoal)}
+                        </p>
+                        <div className="mb-1 flex flex-col items-start">
+                          <span className="text-[10px] uppercase tracking-widest text-white/30 font-bold leading-none mb-1">parar com</span>
+                          <span className="text-base font-bold text-white/60 leading-none">
+                            {formatCurrency(effectiveBankroll + todayDailyGoal)}
+                          </span>
+                        </div>
+                        <ArrowUpRight className="text-accent-green/40 mb-1" size={20} />
+                      </div>
+                      <div className="flex items-center gap-2 mt-4">
+                        <span className="text-xs px-3 py-1 rounded-full bg-white/6 border border-white/10 text-white/55 font-bold uppercase tracking-wider">
+                          {goal.strategy === 'fixed' ? 'Estratégia Fixa' : 'Juros Compostos'}
+                        </span>
+                        <span className="text-xs px-3 py-1 rounded-full bg-white/6 border border-white/10 text-white/55 font-bold uppercase tracking-wider">
+                          {goal.play_weekends ? '7 dias/semana' : 'Seg a Sex'}
+                        </span>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
