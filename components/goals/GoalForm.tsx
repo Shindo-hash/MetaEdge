@@ -8,7 +8,7 @@ type Props = { userId: string; currentBankroll: number }
 
 export default function GoalForm({ userId, currentBankroll }: Props) {
   const router = useRouter()
-  const [strategy, setStrategy] = useState<'fixed' | 'compound'>('fixed')
+  const [strategy, setStrategy] = useState<'fixed' | 'compound' | 'evolutive'>('evolutive')
   const [initialBankroll, setInitialBankroll] = useState(String(currentBankroll))
   const [targetBankroll, setTargetBankroll] = useState('')
   const [dailyPct, setDailyPct] = useState('')
@@ -59,7 +59,7 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
       strategy,
       initial_bankroll: Number(initialBankroll),
       target_bankroll: strategy === 'fixed' ? Number(targetBankroll) : null,
-      daily_percentage: strategy === 'compound' ? Number(dailyPct) : null,
+      daily_percentage: strategy === 'compound' ? Number(dailyPct) : strategy === 'evolutive' ? 30 : null,
       weeks: strategy === 'fixed' ? Number(weeks) : null,
       play_weekends: playWeekends,
       start_date: startDate,
@@ -89,15 +89,15 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
       {/* Strategy */}
       <div>
         <label className="field-label">Estratégia</label>
-        <div className="grid grid-cols-2 gap-2">
-          {(['fixed', 'compound'] as const).map((s) => (
+        <div className="grid grid-cols-3 gap-2">
+          {(['evolutive', 'fixed', 'compound'] as const).map((s) => (
             <button
               key={s}
               type="button"
               onClick={() => setStrategy(s)}
               className={`strategy-pill ${strategy === s ? 'strategy-pill-active' : 'strategy-pill-inactive'}`}
             >
-              {s === 'fixed' ? 'Meta Fixa' : 'Juros Compostos'}
+              {s === 'evolutive' ? 'Gestão Evolutiva' : s === 'fixed' ? 'Meta Fixa' : 'Juros Compostos'}
             </button>
           ))}
         </div>
@@ -136,6 +136,18 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
           <label className="field-label">Crescimento Diário (%)</label>
           <input type="number" value={dailyPct} onChange={(e) => setDailyPct(e.target.value)}
             required min="0.1" max="100" step="0.1" placeholder="Ex: 5" className="field-input" />
+        </div>
+      )}
+
+      {strategy === 'evolutive' && (
+        <div className="bg-accent-green/5 border border-accent-green/20 rounded-xl p-4">
+          <p className="text-sm text-white/70 mb-2">
+            <strong className="text-accent-green">Gestão Evolutiva (Modo Safe)</strong> — Estratégia recomendada
+          </p>
+          <p className="text-xs text-white/50">
+            Começa com 30% de risco e reduz automaticamente conforme sua banca cresce. 
+            Gatilhos: R$1.000 → 15% | R$5.000 → 5% | R$10.000 → 2%
+          </p>
         </div>
       )}
 

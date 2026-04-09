@@ -61,14 +61,13 @@ function buildRealCalendar(
       if (strategy === 'compound') {
         // Compound: banca cresce exponencialmente a cada dia operacional
         // bancaDia = inicial × (1 + pct)^opDayIndex
-        // metaDia  = bancaDiaAnterior × pct
-        const bancaHoje    = goalInitialBankroll * Math.pow(1 + pct, opDayIndex)
-        const bancaAnterior = goalInitialBankroll * Math.pow(1 + pct, opDayIndex - 1)
+        // metaDia  = bancaDia × pct (sobre a banca do DIA, não do dia anterior)
+        const bancaHoje = goalInitialBankroll * Math.pow(1 + pct, opDayIndex)
         bankroll = bancaHoje
-        meta     = bancaAnterior * pct
+        meta = bancaHoje * pct  // Meta calculada sobre a banca do DIA atual
       } else {
         // Fixed: meta constante, banca cresce linearmente
-        meta     = cycle.daily_goal_fixed
+        meta = cycle.daily_goal_fixed
         bankroll = goalInitialBankroll + cycle.daily_goal_fixed * opDayIndex
       }
     }
@@ -130,7 +129,7 @@ export default async function GoalsPage() {
     : (goal?.strategy === 'fixed' && cycle ? cycle.daily_goal_fixed : (goalCalc?.dailyGoal ?? 0))
 
   const dynamicGoals = (goal && cycle)
-    ? calcDynamicGoals(goal, cycle.start_date, todayStr, cycle.daily_goal_fixed ?? 0)
+    ? calcDynamicGoals(goal, cycle.start_date, todayStr, cycle.daily_goal_fixed ?? 0, currentBankroll)
     : null
 
   const calendarRows = (goal && cycle)

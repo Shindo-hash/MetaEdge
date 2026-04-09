@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { calculateGoal, countOpDays, getCompoundDailyGoalForOpDay, calcDynamicGoals, calcAlerts } from '@/lib/services/goals'
+import { DEFAULT_EVOLUTIVE_TRIGGERS, type EvolutiveTrigger } from '@/lib/services/evolutive'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, resultBg } from '@/lib/utils'
 import StatsCard from '@/components/dashboard/StatsCard'
@@ -9,6 +10,7 @@ import BankrollChart from '@/components/dashboard/BankrollChart'
 import PerformanceChart from '@/components/dashboard/PerformanceChart'
 import WeeklyChart from '@/components/dashboard/WeeklyChart'
 import GoalAlerts from '@/components/dashboard/GoalAlerts'
+import RiskLevelBadge from '@/components/dashboard/RiskLevelBadge'
 import {
   Wallet,
   TrendingUp,
@@ -20,6 +22,7 @@ import {
   Calendar,
   LayoutDashboard,
   ChevronRight,
+  Settings,
 } from 'lucide-react'
 
 export default async function DashboardPage() {
@@ -52,7 +55,7 @@ export default async function DashboardPage() {
 
   // Metas dinâmicas (semanal/mensal baseadas no calendário real)
   const dynamicGoals = (goal && cycle)
-    ? calcDynamicGoals(goal, cycle.start_date, todayStr, cycle.daily_goal_fixed ?? 0)
+    ? calcDynamicGoals(goal, cycle.start_date, todayStr, cycle.daily_goal_fixed ?? 0, currentBankroll)
     : null
 
   // Lucro acumulado no ciclo e alertas
@@ -74,14 +77,14 @@ export default async function DashboardPage() {
         : (cycle.daily_goal_fixed ?? todayDailyGoal))
     : null
   
-  // Alertas: semanal/mensal agora usam banca atual vs banca-alvo (não lucro acumulado)
+  // Alertas: semanal/mensal usam banca atual vs banca-alvo
   const alerts = (goal && dynamicGoals)
     ? calcAlerts(
         todayProfit,
-        currentBankroll,                    // banca atual para validar semanal/mensal
         todayDailyGoal,
-        dynamicGoals.weeklyTargetFull,      // banca-alvo da sexta
-        dynamicGoals.monthlyTargetFull      // banca-alvo do mês
+        currentBankroll,
+        dynamicGoals.weeklyTargetFull,
+        dynamicGoals.monthlyTargetFull
       )
     : []
 
@@ -192,7 +195,12 @@ export default async function DashboardPage() {
             </div>
           </div>
         </div>
-        {todaySession && <GoalStatus result={todaySession.result} />}
+        <div className="flex items-center gap-4">
+          {goal?.strategy === 'evolutive' && dynamicGoals?.currentRiskLevel && (
+            <RiskLevelBadge riskLevel={dynamicGoals.currentRiskLevel} size="md" />
+          )}
+          {todaySession && <GoalStatus result={todaySession.result} />}
+        </div>
       </div>
 
       {alerts.length > 0 && <GoalAlerts alerts={alerts} />}
@@ -287,18 +295,29 @@ export default async function DashboardPage() {
                   {dynamicGoals && (
                     <p className={cn(
                       'text-xs mt-1.5 font-bold',
-                      weekProfit >= dynamicGoals.weeklyGoal
+                      currentBankroll >= dynamicGoals.weeklyTargetFull
                         ? 'text-accent-green'
-                        : weekProfit >= dynamicGoals.weeklyGoal * 0.8
+                        : currentBankroll >= dynamicGoals.weeklyTargetFull * 0.9
                         ? 'text-yellow-400'
                         : 'text-white/35'
                     )}>
-                      {formatCurrency(weekProfit)} acumulado
+                      {formatCurrency(currentBankroll)} / {formatCurrency(dynamicGoals.weeklyTargetFull)}
                     </p>
                   )}
                 </div>
                 <div>
-                  <p className="text-xs uppercase tracking-widest text-white/30 font-bold mb-2">Meta Mensal</p>
+                  <div className="flex items-center justify-end gap-2 mb-2">
+                    <p className="text-xs uppercase tracking-widest text-white/30 font-bold">Meta Mensal</p>
+                    {goal?.strategy === 'evolutive' && (
+                      <a
+                        href="/goals?settings=risk"
+                        className="p-1 rounded-lg bg-white/5 border border-white/10 text-white/40 hover:text-accent-green hover:border-accent-green/30 transition-all"
+                        title="Configurações de Risco"
+                      >
+                        <Settings size={12} />
+                      </a>
+                    )}
+                  </div>
                   <p className="text-2xl font-black text-white tracking-tight">
                     {formatCurrency(dynamicGoals?.monthlyGoal ?? goalCalc.monthlyGoal)}
                   </p>
