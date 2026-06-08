@@ -22,7 +22,7 @@ export type Session = {
 export type Goal = {
   id: string
   user_id: string
-  strategy: 'fixed' | 'compound'
+  strategy: 'fixed' | 'compound' | 'evolutive'
   initial_bankroll: number
   target_bankroll: number | null
   daily_percentage: number | null
