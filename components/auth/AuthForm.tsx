@@ -7,6 +7,15 @@ import { Eye, EyeOff } from 'lucide-react'
 
 type Mode = 'login' | 'register'
 
+// Login aceita usuário simples (criado pelo painel do AlphaSignal) OU e-mail
+// de verdade. Se não tiver "@", vira um e-mail disfarçado por trás — mesma
+// lógica usada no AlphaSignal, pra login funcionar igual nos dois apps.
+function toSupabaseIdentifier(input: string): string {
+  const trimmed = input.trim()
+  if (trimmed.includes('@')) return trimmed
+  return `${trimmed.toLowerCase()}@alphasignal.local`
+}
+
 export default function AuthForm({ mode }: { mode: Mode }) {
   const router = useRouter()
   const [name, setName] = useState('')
@@ -23,6 +32,9 @@ export default function AuthForm({ mode }: { mode: Mode }) {
     const supabase = createClient()
 
     if (mode === 'register') {
+      // Cadastro novo continua exigindo e-mail de verdade (não aceita
+      // usuário disfarçado aqui — essa conversão é só pra LOGIN de contas
+      // já criadas pelo painel do AlphaSignal).
       const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
@@ -34,7 +46,8 @@ export default function AuthForm({ mode }: { mode: Mode }) {
       }
       router.push('/dashboard')
     } else {
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+      const identifier = toSupabaseIdentifier(email)
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email: identifier, password })
       if (signInError) { setError(signInError.message); setLoading(false); return }
       router.push('/dashboard')
     }
@@ -58,13 +71,13 @@ export default function AuthForm({ mode }: { mode: Mode }) {
       )}
 
       <div>
-        <label className="field-label">Email</label>
+        <label className="field-label">{mode === 'login' ? 'Email ou usuário' : 'Email'}</label>
         <input
-          type="email"
+          type={mode === 'login' ? 'text' : 'email'}
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
-          placeholder="seu@email.com"
+          placeholder={mode === 'login' ? 'seu@email.com ou seu usuário' : 'seu@email.com'}
           className="field-input"
         />
       </div>
