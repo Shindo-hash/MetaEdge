@@ -14,6 +14,7 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
   const [dailyPct, setDailyPct] = useState('')
   const [weeks, setWeeks] = useState('4')
   const [playWeekends, setPlayWeekends] = useState(false)
+  const [stopLossPct, setStopLossPct] = useState('50')
   const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -62,6 +63,7 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
       daily_percentage: strategy === 'compound' ? Number(dailyPct) : strategy === 'evolutive' ? 30 : null,
       weeks: strategy === 'fixed' ? Number(weeks) : null,
       play_weekends: playWeekends,
+      stop_loss_pct: Number(stopLossPct),
       start_date: startDate,
       is_active: true,
     })
@@ -79,6 +81,14 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
       return
     }
 
+    // Ao começar uma meta nova, a banca "de verdade" (current_bankroll)
+    // precisa acompanhar — senão fica com o valor antigo de uma meta
+    // anterior, mesmo a meta nova dizendo outro valor inicial.
+    await supabase
+      .from('profiles')
+      .update({ current_bankroll: Number(initialBankroll) })
+      .eq('id', userId)
+
     setSuccess(true)
     router.refresh()
     setLoading(false)
@@ -87,7 +97,7 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       {/* Strategy */}
-      <div>
+      <div id="tour-strategy">
         <label className="field-label">Estratégia</label>
         <div className="grid grid-cols-3 gap-2">
           {(['evolutive', 'fixed', 'compound'] as const).map((s) => (
@@ -104,14 +114,14 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        <div>
+        <div id="tour-banca-inicial">
           <label className="field-label">Banca Inicial (R$)</label>
           <input type="number" value={initialBankroll} onChange={(e) => setInitialBankroll(e.target.value)}
             required min="0" step="0.01" className="field-input" />
         </div>
         <div>
           <label className="field-label">Data de Início</label>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}
+          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} autoComplete="off"
             required className="field-input" />
         </div>
       </div>
@@ -167,6 +177,17 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
         </div>
       </div>
 
+      {/* Stop loss */}
+      <div id="tour-stop-loss">
+        <label className="field-label">Aviso de perda (%)</label>
+        <input type="number" value={stopLossPct} onChange={(e) => setStopLossPct(e.target.value)}
+          required min="1" max="99" step="1" className="field-input" />
+        <p className="text-xs text-white/30 mt-1.5">
+          Se sua banca cair esse tanto % em relação ao valor inicial, o app avisa e recomenda
+          sacar o que resta e voltar mais tarde.
+        </p>
+      </div>
+
       {success && (
         <div className="text-accent-green text-sm bg-accent-green/8 border border-accent-green/20 rounded-xl px-4 py-3">
           Meta configurada com sucesso!
@@ -176,7 +197,7 @@ export default function GoalForm({ userId, currentBankroll }: Props) {
         <div className="text-red-400 text-sm bg-red-400/8 border border-red-400/15 rounded-xl px-4 py-3">{error}</div>
       )}
 
-      <button type="submit" disabled={loading} className="btn-primary">
+      <button id="tour-ativar-meta" type="submit" disabled={loading} className="btn-primary">
         {loading
           ? <span className="flex items-center gap-2"><span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" /> Salvando...</span>
           : 'Ativar Meta'

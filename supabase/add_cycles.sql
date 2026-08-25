@@ -23,6 +23,7 @@ create table if not exists public.cycles (
 
 alter table public.cycles enable row level security;
 
+drop policy if exists "cycles: own data" on public.cycles;
 create policy "cycles: own data" on public.cycles
   for all using (auth.uid() = user_id);
 
@@ -52,6 +53,7 @@ create table if not exists public.monthly_history (
 
 alter table public.monthly_history enable row level security;
 
+drop policy if exists "monthly_history: own data" on public.monthly_history;
 create policy "monthly_history: own data" on public.monthly_history
   for all using (auth.uid() = user_id);
 

@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import TransactionForm from '@/components/wallet/TransactionForm'
 import WalletStatement from '@/components/wallet/WalletStatement'
-import PrintButton from '@/components/wallet/PrintButton'
+import PrintButton from '@/components/PrintButton'
 import { Wallet, ArrowDownLeft, ArrowUpRight, TrendingUp, Receipt, ArrowUp, ArrowDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -38,6 +38,12 @@ export default async function WalletPage() {
   })
   const monthKeys = Object.keys(byMonth).sort((a, b) => b.localeCompare(a))
 
+  // Médias mensais — dá uma ideia de "quanto costumo sacar/lucrar por mês"
+  const monthCount = monthKeys.length || 1
+  const avgDepositPerMonth = totalDeposited / monthCount
+  const avgWithdrawalPerMonth = totalWithdrawn / monthCount
+  const avgNetPerMonth = netResult / monthCount
+
   const currentMonthKey = new Date().toISOString().slice(0, 7)
   const currentMonthTx = byMonth[currentMonthKey] ?? []
   const monthLabel = new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
@@ -63,7 +69,7 @@ export default async function WalletPage() {
             <p className="text-white/40 text-xs font-bold uppercase tracking-widest mt-1">Movimentações e Extrato</p>
           </div>
         </div>
-        <PrintButton />
+        <PrintButton label="Exportar PDF do mês" />
       </div>
 
       {/* Summary cards */}
@@ -118,6 +124,26 @@ export default async function WalletPage() {
           </div>
         ))}
       </div>
+
+      {/* Médias mensais */}
+      {monthKeys.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 print:hidden animate-fade-in">
+          <div className="glass-card p-5 border-white/5">
+            <p className="text-[10px] uppercase tracking-widest text-white/30 font-bold mb-1">Média Depositada/Mês</p>
+            <p className="text-lg font-bold text-accent-green">{formatCurrency(avgDepositPerMonth)}</p>
+          </div>
+          <div className="glass-card p-5 border-white/5">
+            <p className="text-[10px] uppercase tracking-widest text-white/30 font-bold mb-1">Média Sacada/Mês</p>
+            <p className="text-lg font-bold text-red-400">{formatCurrency(avgWithdrawalPerMonth)}</p>
+          </div>
+          <div className="glass-card p-5 border-white/5">
+            <p className="text-[10px] uppercase tracking-widest text-white/30 font-bold mb-1">Resultado Médio/Mês</p>
+            <p className={cn('text-lg font-bold', avgNetPerMonth >= 0 ? 'text-accent-green' : 'text-red-400')}>
+              {avgNetPerMonth >= 0 ? '+' : ''}{formatCurrency(avgNetPerMonth)}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Transaction form */}
       <div className="glass-card p-8 print:hidden animate-fade-in border-white/5">

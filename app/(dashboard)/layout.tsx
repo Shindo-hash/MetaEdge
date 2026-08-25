@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { ADMIN_EMAIL } from '@/lib/supabase/admin'
 import Sidebar from '@/components/layout/Sidebar'
 import Header from '@/components/layout/Header'
 import ToasterProvider from '@/components/ToasterProvider'
@@ -17,10 +18,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
     .single()
 
   const userName = profile?.name ?? user.email ?? 'Usuário'
+  const isAdmin = !!ADMIN_EMAIL && (user.email ?? '').trim().toLowerCase() === ADMIN_EMAIL
 
   return (
     <div className="flex min-h-screen bg-[#0a0f1e]">
-      <Sidebar userName={userName} />
+      <Sidebar userName={userName} isAdmin={isAdmin} />
       <div className="flex-1 flex flex-col min-w-0">
         <Header userName={userName} />
         <main className="flex-1 p-6 md:p-10 overflow-auto">

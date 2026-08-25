@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Cycle, Goal, Session } from '@/types'
+import type { Cycle, Goal, Session, MonthlyHistory } from '@/types'
 import { calcCycleDailyGoal, countOpDays } from './goals'
 
 // ── HELPERS ──────────────────────────────────────────────────
@@ -33,14 +33,15 @@ export async function getActiveCycle(
 
 /**
  * Fecha o ciclo atual: salva snapshot em monthly_history
- * e atualiza cycles.status = 'closed'.
+ * e atualiza cycles.status = 'closed'. Retorna o snapshot salvo, pra quem
+ * chamou poder mostrar uma tela de "parabéns" com os números certos.
  */
 export async function closeCycle(
   supabase: SupabaseClient,
   cycle: Cycle,
   sessions: Session[],
   finalBankroll: number,
-): Promise<void> {
+): Promise<MonthlyHistory> {
   const cycleSessions = sessions.filter(s => s.date >= cycle.start_date)
   const totalProfit   = cycleSessions.reduce((acc, s) => acc + s.profit, 0)
   const daysOperated  = cycleSessions.length
@@ -51,7 +52,7 @@ export async function closeCycle(
     : 0
   const endDate = lastDayOfMonth(cycle.year, cycle.month)
 
-  await Promise.all([
+  const [{ data: historyRow }] = await Promise.all([
     supabase.from('monthly_history').insert({
       user_id:          cycle.user_id,
       cycle_id:         cycle.id,
@@ -66,12 +67,14 @@ export async function closeCycle(
       days_operated:    daysOperated,
       days_positive:    daysPositive,
       days_negative:    daysNegative,
-    }),
+    }).select().single(),
     supabase.from('cycles').update({
       status:   'closed',
       end_date: endDate,
     }).eq('id', cycle.id),
   ])
+
+  return historyRow as MonthlyHistory
 }
 
 /**
@@ -114,8 +117,16 @@ export async function openNewCycle(
  * Garante que existe um ciclo ativo para o mês corrente.
  * - Se não há ciclo → cria um.
  * - Se o ciclo existe mas é de mês anterior → fecha e cria novo.
- * - Se o ciclo já é do mês corrente → retorna ele.
+ * - Se o ciclo já é do mês corrente MAS pertence a uma meta diferente da
+ *   ativa agora (usuário trocou de estratégia no meio do mês) → atualiza
+ *   os números do ciclo pra bater com a meta nova, sem fechar o mês
+ *   (não é fim de mês de verdade, é só troca de estratégia).
+ * - Se o ciclo já é do mês corrente e da mesma meta → retorna ele.
  * A banca inicial do ciclo é sempre goal.initial_bankroll (nunca a banca atual).
+ *
+ * Retorna também `justClosed`: preenchido SÓ na chamada exata em que um
+ * ciclo anterior acabou de ser fechado agora — dá pra usar isso pra mostrar
+ * uma tela de "parabéns" com os números do mês que fechou.
  */
 export async function ensureCycleForCurrentMonth(
   supabase: SupabaseClient,
@@ -123,23 +134,50 @@ export async function ensureCycleForCurrentMonth(
   goal: Goal,
   sessions: Session[],
   currentBankroll: number,
-): Promise<Cycle> {
+  preloadedCycle?: Cycle | null,
+): Promise<{ cycle: Cycle; justClosed: MonthlyHistory | null }> {
   const now   = new Date()
   const year  = now.getFullYear()
   const month = now.getMonth() + 1
 
-  const cycle = await getActiveCycle(supabase, userId)
+  // Se a página já buscou o ciclo em paralelo com o resto dos dados
+  // (profile/goal/sessions), usa esse valor — evita uma chamada sequencial
+  // extra ao banco, que é uma das causas de navegação lenta entre páginas.
+  const cycle = preloadedCycle !== undefined ? preloadedCycle : await getActiveCycle(supabase, userId)
 
   // Ciclo já existe e é do mês atual
   if (cycle && cycle.year === year && cycle.month === month) {
-    return cycle
+    // Meta trocou no meio do caminho (mesmo mês, meta diferente) — recalcula
+    // os números do ciclo pra bater com a estratégia nova, sem fechar o mês.
+    if (cycle.goal_id !== goal.id) {
+      const opDays = countOpDays(cycle.start_date, lastDayOfMonth(year, month), goal.play_weekends)
+      const dailyGoalFixed = calcCycleDailyGoal(goal, opDays)
+
+      const { data: updatedCycle, error } = await supabase
+        .from('cycles')
+        .update({
+          goal_id:           goal.id,
+          initial_bankroll:  goal.initial_bankroll,
+          daily_goal_fixed:  dailyGoalFixed,
+          op_days_total:     opDays,
+        })
+        .eq('id', cycle.id)
+        .select()
+        .single()
+
+      if (error) throw new Error('Erro ao atualizar ciclo pra nova meta: ' + error.message)
+      return { cycle: updatedCycle as Cycle, justClosed: null }
+    }
+    return { cycle, justClosed: null }
   }
 
   // Ciclo existe mas é de mês anterior → fechar
+  let justClosed: MonthlyHistory | null = null
   if (cycle) {
-    await closeCycle(supabase, cycle, sessions, currentBankroll)
+    justClosed = await closeCycle(supabase, cycle, sessions, currentBankroll)
   }
 
   // Criar ciclo para o mês atual (usa goal.initial_bankroll internamente)
-  return openNewCycle(supabase, goal, userId, year, month)
+  const newCycle = await openNewCycle(supabase, goal, userId, year, month)
+  return { cycle: newCycle, justClosed }
 }

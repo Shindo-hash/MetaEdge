@@ -11,6 +11,10 @@ import PerformanceChart from '@/components/dashboard/PerformanceChart'
 import WeeklyChart from '@/components/dashboard/WeeklyChart'
 import GoalAlerts from '@/components/dashboard/GoalAlerts'
 import RiskLevelBadge from '@/components/dashboard/RiskLevelBadge'
+import EvolutiveTriggerWrapper from '@/components/dashboard/EvolutiveTriggerWrapper'
+import OnboardingWelcome from '@/components/dashboard/OnboardingWelcome'
+import StopLossAlert from '@/components/dashboard/StopLossAlert'
+import Tour from '@/components/tour/Tour'
 import {
   Wallet,
   TrendingUp,
@@ -39,6 +43,11 @@ export default async function DashboardPage() {
 
   const currentBankroll = profile?.current_bankroll ?? 0
   const effectiveBankroll = currentBankroll > 0 ? currentBankroll : (goal?.initial_bankroll ?? 0)
+
+  // Aviso de perda — compara a banca atual com a inicial da meta ativa
+  const lossPct = (goal && goal.initial_bankroll > 0 && currentBankroll < goal.initial_bankroll)
+    ? ((goal.initial_bankroll - currentBankroll) / goal.initial_bankroll) * 100
+    : 0
   const todayStr = new Date().toISOString().split('T')[0]
   const todaySession = sessions?.find((s) => s.date === todayStr) ?? null
 
@@ -49,14 +58,27 @@ export default async function DashboardPage() {
   const todayOpIndex = (cycle && goal)
     ? countOpDays(cycle.start_date, todayStr, goal.play_weekends)
     : 0
-  const todayDailyGoal = (goal?.strategy === 'compound' && cycle && todayOpIndex > 0)
-    ? getCompoundDailyGoalForOpDay(goal.initial_bankroll, pct, todayOpIndex)
-    : (goalCalc?.dailyGoal ?? 0)
 
-  // Metas dinâmicas (semanal/mensal baseadas no calendário real)
+  // Meta de hoje reage à banca real, mas só pra BAIXO — se foi bem e a
+  // banca real já passou do teórico, a meta NÃO aumenta (evita forçar mais
+  // do que o planejado). Se foi mal, aí sim reduz pra bater com a realidade.
+  const theoreticalBankrollToday = (goal?.strategy === 'compound' && todayOpIndex > 0)
+    ? goal.initial_bankroll * Math.pow(1 + pct, todayOpIndex - 1)
+    : (goal?.initial_bankroll ?? 0)
+  const baseForTodayGoal = Math.min(effectiveBankroll, theoreticalBankrollToday)
+
+  // Metas dinâmicas (semanal/mensal baseadas no calendário real) — precisa
+  // vir ANTES do todayDailyGoal pra Evolutiva poder usar o valor certo
+  // (que já considera o gatilho de risco aceito pelo usuário)
   const dynamicGoals = (goal && cycle)
-    ? calcDynamicGoals(goal, cycle.start_date, todayStr, cycle.daily_goal_fixed ?? 0, currentBankroll)
+    ? calcDynamicGoals(goal, cycle.start_date, todayStr, cycle.daily_goal_fixed ?? 0, currentBankroll, goal.evolutive_triggers ?? undefined)
     : null
+
+  const todayDailyGoal = (goal?.strategy === 'compound' && cycle && todayOpIndex > 0)
+    ? baseForTodayGoal * pct
+    : goal?.strategy === 'evolutive'
+    ? (dynamicGoals?.dailyGoal ?? (goalCalc?.dailyGoal ?? 0))
+    : (goalCalc?.dailyGoal ?? 0)
 
   // Lucro acumulado no ciclo e alertas
   const cycleProfit = sessions?.filter(s => cycle && s.date >= cycle.start_date)
@@ -70,10 +92,10 @@ export default async function DashboardPage() {
   // Verificar se meta diária foi atingida
   const isDailyGoalMet = todayProfit !== null && todayDailyGoal > 0 && todayProfit >= todayDailyGoal
   
-  // Calcular próxima meta (amanhã)
+  // Calcular próxima meta (amanhã) — mesma base usada hoje (min real/teórico) + o que bateu
   const nextDailyGoal = (goal && cycle && isDailyGoalMet)
     ? (goal.strategy === 'compound'
-        ? getCompoundDailyGoalForOpDay(goal.initial_bankroll, pct, todayOpIndex + 1)
+        ? (baseForTodayGoal + todayDailyGoal) * pct
         : (cycle.daily_goal_fixed ?? todayDailyGoal))
     : null
   
@@ -181,6 +203,15 @@ export default async function DashboardPage() {
   return (
     <div className="space-y-10 max-w-6xl mx-auto pb-12">
 
+      {goal && lossPct > 0 && (
+        <StopLossAlert
+          lossPct={lossPct}
+          stopLossPct={goal.stop_loss_pct}
+          initialBankroll={goal.initial_bankroll}
+          currentBankroll={currentBankroll}
+        />
+      )}
+
       {/* ── Cabeçalho ── */}
       <div className="flex items-center justify-between animate-fade-in pt-2">
         <div className="flex items-center gap-5">
@@ -197,7 +228,15 @@ export default async function DashboardPage() {
         </div>
         <div className="flex items-center gap-4">
           {goal?.strategy === 'evolutive' && dynamicGoals?.currentRiskLevel && (
-            <RiskLevelBadge riskLevel={dynamicGoals.currentRiskLevel} size="md" />
+            <div className="flex flex-col items-end gap-1">
+              <RiskLevelBadge riskLevel={dynamicGoals.currentRiskLevel} size="md" />
+              <EvolutiveTriggerWrapper
+                goalId={goal.id}
+                currentBankroll={effectiveBankroll}
+                triggers={goal.evolutive_triggers ?? DEFAULT_EVOLUTIVE_TRIGGERS}
+                acknowledged={goal.evolutive_ack ?? []}
+              />
+            </div>
           )}
           {todaySession && <GoalStatus result={todaySession.result} />}
         </div>
@@ -207,7 +246,7 @@ export default async function DashboardPage() {
 
       {/* ── Card de Meta Diária ── */}
       {goal && goalCalc ? (
-        <div className="glass-card relative overflow-hidden group border-accent-green/20 animate-fade-in shadow-[0_8px_60px_-10px_rgba(0,255,136,0.12)]">
+        <div id="tour-objetivo-diario" className="glass-card relative overflow-hidden group border-accent-green/20 animate-fade-in shadow-[0_8px_60px_-10px_rgba(0,255,136,0.12)]">
           <div className="absolute top-0 right-0 w-80 h-80 bg-accent-green/5 blur-3xl -mr-40 -mt-40 group-hover:bg-accent-green/8 transition-premium pointer-events-none" />
           <div className="absolute bottom-0 left-1/2 w-64 h-32 bg-accent-blue/4 blur-3xl -mb-16 pointer-events-none" />
 
@@ -272,7 +311,7 @@ export default async function DashboardPage() {
                       </div>
                       <div className="flex items-center gap-2 mt-4">
                         <span className="text-xs px-3 py-1 rounded-full bg-white/6 border border-white/10 text-white/55 font-bold uppercase tracking-wider">
-                          {goal.strategy === 'fixed' ? 'Estratégia Fixa' : 'Juros Compostos'}
+                          {goal.strategy === 'fixed' ? 'Meta Fixa' : goal.strategy === 'compound' ? 'Juros Compostos' : 'Gestão Evolutiva'}
                         </span>
                         <span className="text-xs px-3 py-1 rounded-full bg-white/6 border border-white/10 text-white/55 font-bold uppercase tracking-wider">
                           {goal.play_weekends ? '7 dias/semana' : 'Seg a Sex'}
@@ -363,19 +402,11 @@ export default async function DashboardPage() {
           </div>
         </div>
       ) : (
-        <div className="glass-card p-12 text-center animate-fade-in border-dashed border-white/8">
-          <div className="w-20 h-20 bg-white/5 rounded-full flex items-center justify-center mx-auto mb-5">
-            <Target className="text-white/20" size={36} />
-          </div>
-          <p className="text-white/40 font-medium text-lg mb-5">Nenhuma meta ativa configurada</p>
-          <a href="/goals" className="inline-flex items-center gap-2 text-accent-green text-sm font-bold uppercase tracking-widest hover:gap-3 transition-premium">
-            Configurar nova meta <ChevronRight size={16} />
-          </a>
-        </div>
+        <OnboardingWelcome />
       )}
 
       {/* ── Stats Cards ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 animate-fade-in">
+      <div id="tour-stats" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 animate-fade-in">
         <StatsCard
           title="Banca Atual"
           value={formatCurrency(effectiveBankroll)}
@@ -410,7 +441,7 @@ export default async function DashboardPage() {
       {/* ── Gráficos ── */}
       <div className="space-y-8 animate-fade-in">
         {/* BankrollChart: Real vs Meta */}
-        <div className="glass-card p-8 md:p-10 border-white/5">
+        <div id="tour-chart" className="glass-card p-8 md:p-10 border-white/5">
           <div className="flex items-center justify-between mb-8">
             <div>
               <h3 className="text-sm font-bold text-white">Banca Real vs Meta</h3>
@@ -503,6 +534,38 @@ export default async function DashboardPage() {
             ))}
           </div>
         </div>
+      )}
+
+      {goal && (
+        <Tour
+          storageKey="metaedge_tour_dashboard_seen"
+          steps={[
+            {
+              target: '#tour-objetivo-diario',
+              title: 'Seu Objetivo Diário',
+              content: 'Esse é o valor que você precisa ganhar hoje. Assim que bater, o card avisa "Parabéns!" e mostra a meta de amanhã.',
+              placement: 'bottom',
+            },
+            {
+              target: '#tour-stats',
+              title: 'Seu Resumo Geral',
+              content: 'Banca atual, lucro total, taxa de acerto e total de sessões — sempre visível aqui em cima.',
+              placement: 'bottom',
+            },
+            {
+              target: '#tour-chart',
+              title: 'Banca Real vs Meta',
+              content: 'Esse gráfico compara sua evolução real com o plano original — ajuda a ver o quanto você se afastou (pra cima ou pra baixo) do que era esperado.',
+              placement: 'top',
+            },
+            {
+              target: '#tour-menu',
+              title: 'Navegação',
+              content: 'Sessões pra registrar seu dia, Metas pra configurar/trocar estratégia, Carteira pra depósitos e saques, e Histórico pra ver meses fechados.',
+              placement: 'right',
+            },
+          ]}
+        />
       )}
     </div>
   )

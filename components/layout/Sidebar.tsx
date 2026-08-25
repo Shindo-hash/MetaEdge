@@ -13,6 +13,7 @@ import {
   LogOut,
   ChevronRight,
   BookOpen,
+  ShieldCheck,
 } from 'lucide-react'
 
 const navItems = [
@@ -23,7 +24,7 @@ const navItems = [
   { label: 'Histórico',  href: '/historico', icon: BookOpen },
 ]
 
-export default function Sidebar({ userName }: { userName: string }) {
+export default function Sidebar({ userName, isAdmin = false }: { userName: string; isAdmin?: boolean }) {
   const pathname = usePathname()
   const router = useRouter()
 
@@ -54,7 +55,7 @@ export default function Sidebar({ userName }: { userName: string }) {
       <p className="text-[11px] uppercase tracking-[0.2em] text-white/20 font-bold px-4 mb-3">Menu</p>
 
       {/* Nav */}
-      <nav className="flex-1 space-y-1">
+      <nav id="tour-menu" className="flex-1 space-y-1">
         {navItems.map((item) => {
           const Icon = item.icon
           const isActive = pathname === item.href
@@ -87,6 +88,33 @@ export default function Sidebar({ userName }: { userName: string }) {
             </Link>
           )
         })}
+
+        {isAdmin && (
+          <Link
+            href="/admin"
+            className={cn(
+              'group flex items-center justify-between px-4 py-3.5 rounded-2xl text-sm font-semibold transition-premium mt-4 pt-4 border-t border-white/6',
+              pathname === '/admin'
+                ? 'bg-accent-blue/10 text-accent-blue'
+                : 'text-white/40 hover:text-white/80 hover:bg-white/5'
+            )}
+          >
+            <div className="flex items-center gap-3.5">
+              <div className={cn(
+                'w-9 h-9 rounded-xl flex items-center justify-center transition-premium',
+                pathname === '/admin' ? 'bg-accent-blue/15' : 'bg-white/5 group-hover:bg-white/8'
+              )}>
+                <ShieldCheck
+                  size={18}
+                  strokeWidth={pathname === '/admin' ? 2.5 : 2}
+                  className={pathname === '/admin' ? 'text-accent-blue' : 'text-white/35 group-hover:text-white/60'}
+                />
+              </div>
+              <span className="text-[15px]">Admin</span>
+            </div>
+            {pathname === '/admin' && <ChevronRight size={14} className="text-accent-blue/50" />}
+          </Link>
+        )}
       </nav>
 
       {/* User footer */}

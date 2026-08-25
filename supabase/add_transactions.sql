@@ -15,6 +15,7 @@ create table if not exists public.transactions (
 
 alter table public.transactions enable row level security;
 
+drop policy if exists "transactions: own data" on public.transactions;
 create policy "transactions: own data" on public.transactions
   for all using (auth.uid() = user_id);
 

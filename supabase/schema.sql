@@ -14,6 +14,7 @@ create table if not exists public.profiles (
 
 alter table public.profiles enable row level security;
 
+drop policy if exists "profiles: own data" on public.profiles;
 create policy "profiles: own data" on public.profiles
   for all using (auth.uid() = id);
 
@@ -42,7 +43,7 @@ create trigger on_auth_user_created
 create table if not exists public.goals (
   id               uuid primary key default gen_random_uuid(),
   user_id          uuid not null references public.profiles(id) on delete cascade,
-  strategy         text not null check (strategy in ('fixed', 'compound')),
+  strategy         text not null check (strategy in ('fixed', 'compound', 'evolutive')),
   initial_bankroll numeric(12,2) not null,
   target_bankroll  numeric(12,2),
   daily_percentage numeric(6,2),
@@ -55,8 +56,19 @@ create table if not exists public.goals (
 
 alter table public.goals enable row level security;
 
+drop policy if exists "goals: own data" on public.goals;
 create policy "goals: own data" on public.goals
   for all using (auth.uid() = user_id);
+
+-- Segurança extra: se a tabela "goals" já existir de uma tentativa anterior
+-- com a restrição antiga (sem 'evolutive'), corrige aqui sem dar erro.
+do $$
+begin
+  alter table public.goals drop constraint if exists goals_strategy_check;
+  alter table public.goals add constraint goals_strategy_check
+    check (strategy in ('fixed', 'compound', 'evolutive'));
+exception when others then null;
+end $$;
 
 -- ============================================================
 -- 3. SESSIONS
@@ -75,6 +87,7 @@ create table if not exists public.sessions (
 
 alter table public.sessions enable row level security;
 
+drop policy if exists "sessions: own data" on public.sessions;
 create policy "sessions: own data" on public.sessions
   for all using (auth.uid() = user_id);
 
@@ -97,5 +110,6 @@ create table if not exists public.daily_progress (
 
 alter table public.daily_progress enable row level security;
 
+drop policy if exists "daily_progress: own data" on public.daily_progress;
 create policy "daily_progress: own data" on public.daily_progress
   for all using (auth.uid() = user_id);

@@ -1,13 +1,16 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { calculateGoal, countOpDays, getCompoundDailyGoalForOpDay, calcDynamicGoals } from '@/lib/services/goals'
+import { calculateGoal, countOpDays, calcDynamicGoals } from '@/lib/services/goals'
+import { getCurrentRiskLevel, DEFAULT_EVOLUTIVE_TRIGGERS, type EvolutiveTrigger } from '@/lib/services/evolutive'
 import { ensureCycleForCurrentMonth } from '@/lib/services/cycles'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import GoalForm from '@/components/goals/GoalForm'
+import MonthClosedCelebration from '@/components/dashboard/MonthClosedCelebration'
+import Tour from '@/components/tour/Tour'
 import PrintButton from '@/components/PrintButton'
 import { Target, TrendingUp, ShieldCheck, Calculator, CalendarDays, ChevronDown, Info, TrendingDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { Cycle } from '@/types'
+import type { Cycle, Session } from '@/types'
 
 /* ── Helpers ────────────────────────────────────────────────── */
 
@@ -32,15 +35,30 @@ function buildRealCalendar(
   month: number,
   cycle: Cycle,
   goalInitialBankroll: number,
-  strategy: 'fixed' | 'compound',
+  strategy: 'fixed' | 'compound' | 'evolutive',
   pct: number,
+  sessions: Session[],
+  evolutiveTriggers?: EvolutiveTrigger[],
 ): CalendarDay[] {
   const days = getDaysInMonth(year, month)
   const todayStr = new Date().toISOString().split('T')[0]
   const rows: CalendarDay[] = []
   const weekdayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 
+  // Mapa rápido de sessões reais por data, pra achar o resultado de dias
+  // que já aconteceram sem precisar varrer o array toda hora.
+  const sessionByDate = new Map<string, Session>()
+  sessions.forEach((s) => sessionByDate.set(s.date, s))
+
   let opDayIndex = 0
+  // Cronograma teórico "normal" — é a base/referência do plano completo,
+  // sempre igual, não reage a dia bom nem dia ruim. Serve pra mostrar até
+  // onde dá pra chegar SE tudo correr como planejado (não é promessa).
+  let theoreticalBankroll = goalInitialBankroll
+  let fixedBankroll = goalInitialBankroll
+  // Última banca real conhecida — só usada pra preencher dias passados sem
+  // sessão registrada (não jogou naquele dia).
+  let lastKnownRealBankroll = goalInitialBankroll
 
   for (let d = 1; d <= days; d++) {
     const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`
@@ -48,7 +66,6 @@ function buildRealCalendar(
     const dow = dateObj.getDay()
     const weekend = dow === 0 || dow === 6
 
-    // Se play_weekends: todo dia é op. Senão: apenas dias úteis.
     const isPlayWeekends = cycle.op_days_total === days
     const isOp = isPlayWeekends || !weekend
 
@@ -58,17 +75,58 @@ function buildRealCalendar(
     let meta: number | null = null
 
     if (isOp) {
+      const isPast = dateStr < todayStr
+      const session = sessionByDate.get(dateStr)
+
       if (strategy === 'compound') {
-        // Compound: banca cresce exponencialmente a cada dia operacional
-        // bancaDia = inicial × (1 + pct)^opDayIndex
-        // metaDia  = bancaDia × pct (sobre a banca do DIA, não do dia anterior)
-        const bancaHoje = goalInitialBankroll * Math.pow(1 + pct, opDayIndex)
-        bankroll = bancaHoje
-        meta = bancaHoje * pct  // Meta calculada sobre a banca do DIA atual
+        const bancaTeoricaHoje = theoreticalBankroll * (1 + pct)
+        const metaTeoricaHoje  = theoreticalBankroll * pct
+        theoreticalBankroll = bancaTeoricaHoje
+
+        if (isPast && session) {
+          // Dia já aconteceu e tem sessão registrada — mostra o resultado
+          // REAL (histórico de verdade), não o teórico.
+          meta = session.initial_bankroll * pct
+          bankroll = session.final_bankroll
+          lastKnownRealBankroll = session.final_bankroll
+        } else if (isPast) {
+          // Dia já passou sem sessão registrada — mantém a última banca
+          // real conhecida (não jogou, não mudou nada).
+          meta = lastKnownRealBankroll * pct
+          bankroll = lastKnownRealBankroll
+        } else {
+          // Hoje e dias futuros: cronograma teórico normal — é a base do
+          // plano, sempre a mesma, sem reagir a ganho ou perda do dia a dia.
+          meta = metaTeoricaHoje
+          bankroll = bancaTeoricaHoje
+        }
+      } else if (strategy === 'evolutive') {
+        // Evolutiva: igual ao compound, mas o % muda sozinho conforme a
+        // banca cruza os gatilhos de risco (30% → 15% → 5% → 2%...).
+        const tiers = evolutiveTriggers ?? DEFAULT_EVOLUTIVE_TRIGGERS
+        const tierPctHoje = getCurrentRiskLevel(theoreticalBankroll, tiers).percentage / 100
+        const bancaTeoricaHoje = theoreticalBankroll * (1 + tierPctHoje)
+        const metaTeoricaHoje  = theoreticalBankroll * tierPctHoje
+        theoreticalBankroll = bancaTeoricaHoje
+
+        if (isPast && session) {
+          const tierPctDoDia = getCurrentRiskLevel(session.initial_bankroll, tiers).percentage / 100
+          meta = session.initial_bankroll * tierPctDoDia
+          bankroll = session.final_bankroll
+          lastKnownRealBankroll = session.final_bankroll
+        } else if (isPast) {
+          const tierPctParado = getCurrentRiskLevel(lastKnownRealBankroll, tiers).percentage / 100
+          meta = lastKnownRealBankroll * tierPctParado
+          bankroll = lastKnownRealBankroll
+        } else {
+          meta = metaTeoricaHoje
+          bankroll = bancaTeoricaHoje
+        }
       } else {
-        // Fixed: meta constante, banca cresce linearmente
+        // Fixed: meta constante — não precisa reagir à banca real.
         meta = cycle.daily_goal_fixed
-        bankroll = goalInitialBankroll + cycle.daily_goal_fixed * opDayIndex
+        fixedBankroll = goalInitialBankroll + cycle.daily_goal_fixed * opDayIndex
+        bankroll = fixedBankroll
       }
     }
 
@@ -94,10 +152,11 @@ export default async function GoalsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [{ data: profile }, { data: goal }, { data: sessions }] = await Promise.all([
+  const [{ data: profile }, { data: goal }, { data: sessions }, { data: preloadedCycle }] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', user.id).single(),
     supabase.from('goals').select('*').eq('user_id', user.id).eq('is_active', true).single(),
     supabase.from('sessions').select('*').eq('user_id', user.id).order('date', { ascending: false }),
+    supabase.from('cycles').select('*').eq('user_id', user.id).eq('status', 'active').single(),
   ])
 
   const currentBankroll   = profile?.current_bankroll ?? 0
@@ -106,11 +165,14 @@ export default async function GoalsPage() {
 
   /* ── Ciclo ──────────────────────────────────────────────── */
   let cycle: Cycle | null = null
+  let justClosed = null as Awaited<ReturnType<typeof ensureCycleForCurrentMonth>>['justClosed']
   if (goal) {
     try {
-      cycle = await ensureCycleForCurrentMonth(
-        supabase, user.id, goal, sessions ?? [], currentBankroll
+      const result = await ensureCycleForCurrentMonth(
+        supabase, user.id, goal, sessions ?? [], currentBankroll, preloadedCycle ?? null
       )
+      cycle = result.cycle
+      justClosed = result.justClosed
     } catch (_) { /* sem ciclo ativo — pode ser primeiro acesso */ }
   }
 
@@ -124,16 +186,29 @@ export default async function GoalsPage() {
   const todayOpIndex = (cycle && goal)
     ? countOpDays(cycle.start_date, todayStr, goal.play_weekends)
     : 0
-  const todayDailyGoal = (goal?.strategy === 'compound' && cycle && todayOpIndex > 0)
-    ? getCompoundDailyGoalForOpDay(goal.initial_bankroll, pct, todayOpIndex)
-    : (goal?.strategy === 'fixed' && cycle ? cycle.daily_goal_fixed : (goalCalc?.dailyGoal ?? 0))
 
+  // Meta de hoje reage à banca real, mas só pra BAIXO — se foi bem e a
+  // banca real já passou do teórico, a meta NÃO aumenta (evita forçar mais
+  // do que o planejado). Se foi mal, aí sim reduz pra bater com a realidade.
+  const theoreticalBankrollToday = (goal?.strategy === 'compound' && todayOpIndex > 0)
+    ? goal.initial_bankroll * Math.pow(1 + pct, todayOpIndex - 1)
+    : (goal?.initial_bankroll ?? 0)
+  const baseForTodayGoal = Math.min(effectiveBankroll, theoreticalBankrollToday)
+
+  // Metas dinâmicas — precisa vir ANTES do todayDailyGoal pra Evolutiva
+  // poder usar o valor certo (que já considera o gatilho de risco aceito)
   const dynamicGoals = (goal && cycle)
-    ? calcDynamicGoals(goal, cycle.start_date, todayStr, cycle.daily_goal_fixed ?? 0, currentBankroll)
+    ? calcDynamicGoals(goal, cycle.start_date, todayStr, cycle.daily_goal_fixed ?? 0, currentBankroll, goal.evolutive_triggers ?? undefined)
     : null
 
+  const todayDailyGoal = (goal?.strategy === 'compound' && cycle && todayOpIndex > 0)
+    ? baseForTodayGoal * pct
+    : goal?.strategy === 'evolutive'
+    ? (dynamicGoals?.dailyGoal ?? (goalCalc?.dailyGoal ?? 0))
+    : (goal?.strategy === 'fixed' && cycle ? cycle.daily_goal_fixed : (goalCalc?.dailyGoal ?? 0))
+
   const calendarRows = (goal && cycle)
-    ? buildRealCalendar(year, month, cycle, goal.initial_bankroll, goal.strategy, pct)
+    ? buildRealCalendar(year, month, cycle, goal.initial_bankroll, goal.strategy, pct, sessions ?? [], goal.evolutive_triggers ?? undefined)
     : []
 
   /* ── Progresso do ciclo ─────────────────────────────────── */
@@ -153,6 +228,14 @@ export default async function GoalsPage() {
   const isAhead      = progressDiff >= 0
   const totalMeta    = calendarRows.reduce((s, r) => s + (r.meta ?? 0), 0)
 
+  // Quanto falta pra ganhar de HOJE até o fim do mês (não o mês inteiro)
+  const todayRow = calendarRows.find(r => r.isToday)
+  const remainingMeta = todayRow
+    ? calendarRows
+        .filter(r => r.isOpDay && r.opDayIndex >= todayRow.opDayIndex)
+        .reduce((s, r) => s + (r.meta ?? 0), 0)
+    : 0
+
   /* ── Dados para impressão ───────────────────────────────── */
   const sessionMap = Object.fromEntries((sessions ?? []).map(s => [s.date, s]))
   const printRows = calendarRows.map(row => ({
@@ -169,6 +252,8 @@ export default async function GoalsPage() {
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto pb-10">
+
+      {justClosed && <MonthClosedCelebration history={justClosed} />}
 
       {/* ── Cabeçalho ── */}
       <div className="flex items-center justify-between animate-fade-in">
@@ -198,7 +283,7 @@ export default async function GoalsPage() {
               <h3 className="text-sm font-bold text-white uppercase tracking-widest">Meta Ativa</h3>
             </div>
             <span className="text-xs px-3 py-1.5 rounded-full bg-accent-green/8 border border-accent-green/20 text-accent-green font-black uppercase tracking-widest">
-              {goal.strategy === 'fixed' ? 'Estratégia Fixa' : 'Juros Compostos'}
+              {goal.strategy === 'fixed' ? 'Meta Fixa' : goal.strategy === 'compound' ? 'Juros Compostos' : 'Gestão Evolutiva'}
             </span>
           </div>
 
@@ -206,7 +291,7 @@ export default async function GoalsPage() {
             {[
               {
                 icon: Target,
-                label: goal?.strategy === 'compound' ? 'Meta de Hoje' : 'Meta Diária (Fixa)',
+                label: goal.strategy === 'fixed' ? 'Meta Diária (Fixa)' : 'Meta de Hoje',
                 value: formatCurrency(todayDailyGoal),
                 color: 'text-accent-green',
                 border: 'border-accent-green/20',
@@ -239,7 +324,14 @@ export default async function GoalsPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 pt-7 border-t border-white/5 relative z-10">
             {[
               { label: 'Banca Inicial', value: formatCurrency(goal.initial_bankroll), color: 'text-white/80' },
-              { label: 'Taxa Diária', value: goal.strategy === 'compound' ? `${goal.daily_percentage}%` : '—', color: 'text-accent-green' },
+              {
+                label: 'Taxa Diária',
+                value:
+                  goal.strategy === 'compound' ? `${goal.daily_percentage}%`
+                  : goal.strategy === 'evolutive' ? `${dynamicGoals?.currentRiskLevel?.percentage ?? 30}%`
+                  : '—',
+                color: 'text-accent-green',
+              },
               { label: 'Data de Início', value: formatDate(goal.start_date), color: 'text-white/80' },
               { label: 'FDS', value: goal.play_weekends ? 'ATIVADO' : 'DESATIVADO', color: goal.play_weekends ? 'text-accent-green' : 'text-red-400/70' },
             ].map(({ label, value, color }) => (
@@ -408,6 +500,14 @@ export default async function GoalsPage() {
                 })}
               </tbody>
               <tfoot>
+                <tr className="border-t border-white/5 bg-white/[0.015]">
+                  <td colSpan={2} className="px-8 py-3 text-xs font-bold uppercase tracking-widest text-white/30">
+                    Restante até o fim do mês (a partir de hoje)
+                  </td>
+                  <td className="px-8 py-3 text-right text-sm font-black text-white/70">
+                    {formatCurrency(remainingMeta)}
+                  </td>
+                </tr>
                 <tr className="border-t-2 border-white/10 bg-white/[0.02]">
                   <td colSpan={2} className="px-8 py-4 text-xs font-black uppercase tracking-widest text-white/40">
                     Total projetado ({cycle.op_days_total} dias operacionais)
@@ -423,7 +523,7 @@ export default async function GoalsPage() {
       )}
 
       {/* ── Alterar Planejamento ── */}
-      <details className="group animate-fade-in no-print">
+      <details open={!goal} className="group animate-fade-in no-print">
         <summary className="glass-card px-8 py-5 border-white/5 flex items-center justify-between cursor-pointer list-none select-none hover:border-white/10 transition-premium rounded-2xl">
           <div className="flex items-center gap-3">
             <Calculator size={18} className="text-accent-blue" />
@@ -438,6 +538,38 @@ export default async function GoalsPage() {
         </div>
       </details>
 
+      {!goal && (
+        <Tour
+          storageKey="metaedge_tour_goalform_seen"
+          steps={[
+            {
+              target: '#tour-banca-inicial',
+              title: 'Sua Banca Inicial',
+              content: 'Aqui você digita o valor total que tem disponível pra operar hoje. É a partir desse número que o app calcula todas as suas metas.',
+              placement: 'bottom',
+            },
+            {
+              target: '#tour-strategy',
+              title: 'Escolha sua Estratégia',
+              content: 'Gestão Evolutiva ajusta o risco sozinha conforme a banca cresce (recomendada). Meta Fixa define um valor final e prazo. Juros Compostos usa uma % de crescimento diário.',
+              placement: 'bottom',
+            },
+            {
+              target: '#tour-stop-loss',
+              title: 'Seu Limite de Segurança',
+              content: 'Se sua banca cair esse tanto % em relação ao início, o app avisa e recomenda parar por hoje. Ajuste pro nível que você se sente confortável.',
+              placement: 'top',
+            },
+            {
+              target: '#tour-ativar-meta',
+              title: 'Pronto pra começar!',
+              content: 'Depois de preencher tudo, clica aqui pra ativar sua meta. Você pode trocar de estratégia quando quiser, a qualquer momento.',
+              placement: 'top',
+            },
+          ]}
+        />
+      )}
+
       {/* ── IMPRESSÃO: Plano do Mês (visível apenas ao imprimir) ── */}
       {goal && cycle && (
         <div className="print-only">
@@ -447,7 +579,7 @@ export default async function GoalsPage() {
                 MetaEdge PRO — Plano do Mês · {monthName.charAt(0).toUpperCase() + monthName.slice(1)}
               </h1>
               <p style={{ fontSize: 9, color: '#6b7280', margin: '2px 0 0' }}>
-                {goal.strategy === 'compound' ? 'Juros Compostos' : 'Meta Fixa'} ·
+                {goal.strategy === 'compound' ? 'Juros Compostos' : goal.strategy === 'evolutive' ? 'Gestão Evolutiva' : 'Meta Fixa'} ·
                 Banca inicial: {formatCurrency(goal.initial_bankroll)} ·
                 {goal.daily_percentage}% ao dia ·
                 {goal.play_weekends ? '7 dias/semana' : 'Seg–Sex'}

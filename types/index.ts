@@ -30,6 +30,10 @@ export type Goal = {
   play_weekends: boolean
   start_date: string
   is_active: boolean
+  stop_loss_pct: number
+  evolutive_triggers: { threshold: number; percentage: number; label: string; color: string }[] | null
+  evolutive_current_pct: number | null
+  evolutive_ack: number[]
   created_at: string
 }
 

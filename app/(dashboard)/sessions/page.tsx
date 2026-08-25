@@ -6,7 +6,10 @@ import GoalStatus from '@/components/dashboard/GoalStatus'
 import DeleteSessionButton from '@/components/sessions/DeleteSessionButton'
 import PrintButton from '@/components/PrintButton'
 import { ensureCycleForCurrentMonth } from '@/lib/services/cycles'
-import { countOpDays, getCompoundDailyGoalForOpDay } from '@/lib/services/goals'
+import MonthClosedCelebration from '@/components/dashboard/MonthClosedCelebration'
+import DailyChart from '@/components/dashboard/DailyChart'
+import { getCurrentRiskLevel } from '@/lib/services/evolutive'
+import { countOpDays } from '@/lib/services/goals'
 import { ClipboardList, History, PlusCircle, ArrowRightLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -15,29 +18,45 @@ export default async function SessionsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const [{ data: profile }, { data: sessions }, { data: goal }] = await Promise.all([
+  const [{ data: profile }, { data: sessions }, { data: goal }, { data: preloadedCycle }] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', user.id).single(),
     supabase.from('sessions').select('*').eq('user_id', user.id).order('date', { ascending: false }),
     supabase.from('goals').select('*').eq('user_id', user.id).eq('is_active', true).single(),
+    supabase.from('cycles').select('*').eq('user_id', user.id).eq('status', 'active').single(),
   ])
 
   const currentBankroll   = profile?.current_bankroll ?? 0
   const effectiveBankroll = currentBankroll > 0 ? currentBankroll : (goal?.initial_bankroll ?? 0)
-  const todayStr = new Date().toISOString().split('T')[0]
 
   // Meta diária correta: compound usa a fórmula do dia operacional atual
   let dailyGoal = 0
+  let justClosed = null as Awaited<ReturnType<typeof ensureCycleForCurrentMonth>>['justClosed']
   if (goal) {
     try {
-      const cycle = await ensureCycleForCurrentMonth(
-        supabase, user.id, goal, sessions ?? [], currentBankroll
+      const result = await ensureCycleForCurrentMonth(
+        supabase, user.id, goal, sessions ?? [], currentBankroll, preloadedCycle ?? null
       )
+      const cycle = result.cycle
+      justClosed = result.justClosed
       if (goal.strategy === 'compound') {
         const pct = (goal.daily_percentage ?? 0) / 100
+        const todayStr = new Date().toISOString().split('T')[0]
         const todayOpIndex = countOpDays(cycle.start_date, todayStr, goal.play_weekends)
-        dailyGoal = todayOpIndex > 0
-          ? getCompoundDailyGoalForOpDay(goal.initial_bankroll, pct, todayOpIndex)
-          : goal.initial_bankroll * pct
+        // Meta reage à banca real só pra baixo — nunca aumenta além do
+        // teórico, só reduz se a banca real ficou abaixo do planejado.
+        const theoreticalBankrollToday = todayOpIndex > 0
+          ? goal.initial_bankroll * Math.pow(1 + pct, todayOpIndex - 1)
+          : goal.initial_bankroll
+        const base = Math.min(effectiveBankroll, theoreticalBankrollToday)
+        dailyGoal = base * pct
+      } else if (goal.strategy === 'evolutive') {
+        // Usa o % já ACEITO pelo usuário (gatilho de risco), ou o nível
+        // correspondente à banca inicial se ainda não decidiu nenhum.
+        const triggers = goal.evolutive_triggers ?? undefined
+        const riskLevel = goal.evolutive_current_pct != null
+          ? { percentage: goal.evolutive_current_pct }
+          : getCurrentRiskLevel(goal.initial_bankroll, triggers)
+        dailyGoal = effectiveBankroll * (riskLevel.percentage / 100)
       } else {
         dailyGoal = cycle.daily_goal_fixed
       }
@@ -46,6 +65,7 @@ export default async function SessionsPage() {
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto pb-10">
+      {justClosed && <MonthClosedCelebration history={justClosed} />}
       <div className="flex items-center gap-4 animate-fade-in text-left">
         <div className="p-3 bg-accent-green/10 rounded-2xl border border-accent-green/20 neon-glow-green">
           <ClipboardList className="text-accent-green" size={24} />
@@ -67,6 +87,18 @@ export default async function SessionsPage() {
           userId={user.id}
         />
       </div>
+
+      {sessions && sessions.length > 0 && (
+        <div className="glass-card p-8 animate-fade-in border-white/5 no-print">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h3 className="text-sm font-bold text-white">Evolução da Banca</h3>
+              <p className="text-xs text-white/30 mt-0.5">Últimas {Math.min(sessions.length, 14)} sessões</p>
+            </div>
+          </div>
+          <DailyChart sessions={sessions} />
+        </div>
+      )}
 
       {sessions && sessions.length > 0 && (
         <div className="glass-card p-8 animate-fade-in border-white/5">

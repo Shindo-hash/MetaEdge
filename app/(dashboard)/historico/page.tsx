@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import HistoricoCard from '@/components/historico/HistoricoCard'
+import MonthlyChart from '@/components/dashboard/MonthlyChart'
 import { BookOpen, Trophy } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { cn } from '@/lib/utils'
@@ -10,12 +11,19 @@ export default async function HistoricoPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: history } = await supabase
-    .from('monthly_history')
-    .select('*')
-    .eq('user_id', user.id)
-    .order('year', { ascending: false })
-    .order('month', { ascending: false })
+  const [{ data: history }, { data: sessions }] = await Promise.all([
+    supabase
+      .from('monthly_history')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('year', { ascending: false })
+      .order('month', { ascending: false }),
+    supabase
+      .from('sessions')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('date', { ascending: true }),
+  ])
 
   const records = history ?? []
 
@@ -84,6 +92,20 @@ export default async function HistoricoPage() {
                 <p className={cn('text-2xl font-black tracking-tight', color)}>{value}</p>
               </div>
             ))}
+          </div>
+
+          {/* ── Gráfico de lucro por mês ── */}
+          <div className="glass-card p-8 md:p-10 border-white/5 animate-fade-in">
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <h3 className="text-sm font-bold text-white">Lucro por Mês</h3>
+                <p className="text-xs text-white/30 mt-0.5">Últimos 6 meses</p>
+              </div>
+              <div className="w-9 h-9 rounded-xl bg-accent-green/8 border border-accent-green/15 flex items-center justify-center">
+                <Trophy size={16} className="text-accent-green" />
+              </div>
+            </div>
+            <MonthlyChart sessions={sessions ?? []} />
           </div>
 
           {/* ── Lista de meses ── */}

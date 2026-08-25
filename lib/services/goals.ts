@@ -1,5 +1,17 @@
 import { Goal, GoalCalc, Session } from '@/types'
-import { getCurrentRiskLevel, calculateEvolutiveProjection, type EvolutiveTrigger } from './evolutive'
+import { getCurrentRiskLevel, calculateEvolutiveProjection, DEFAULT_EVOLUTIVE_TRIGGERS, type EvolutiveTrigger, type RiskLevel } from './evolutive'
+
+/** Reconstrói o RiskLevel (label/cor) a partir de um % já decidido/aceito
+ * pelo usuário — usado quando o risco NÃO deve mais ser recalculado
+ * automaticamente da banca crua. */
+function findRiskLevelByPct(pct: number, triggers?: EvolutiveTrigger[]): RiskLevel {
+  const list = triggers ?? DEFAULT_EVOLUTIVE_TRIGGERS
+  const match = list.find((t) => t.percentage === pct)
+  if (match) {
+    return { level: match.percentage, label: match.label, color: match.color, percentage: match.percentage }
+  }
+  return { level: 30, label: 'Alavancagem Máxima', color: 'red', percentage: 30 }
+}
 
 // ── UTILITÁRIOS DE DIAS ───────────────────────────────────────
 
@@ -231,13 +243,15 @@ export function calcDynamicGoals(
   if (weekLastOpDay === 0) weekLastOpDay = 1
   if (todayOpIndex === 0) todayOpIndex = 1
 
-  const firstOfMonth = new Date(todayY, todayM - 1, 1)
-  const firstDow = firstOfMonth.getDay()
-  const firstMonOffset = (firstDow + 6) % 7
-  const firstWeekMonday = new Date(firstOfMonth)
-  firstWeekMonday.setDate(firstOfMonth.getDate() - firstMonOffset)
+  // Semana contada a partir de quando a META começou (não do calendário do
+  // mês) — assim o primeiro dia da meta sempre mostra "Semana 1", mesmo se
+  // a meta começar no meio do mês.
+  const cycleStartDow = cycleStart.getDay()
+  const cycleStartMonOffset = (cycleStartDow + 6) % 7
+  const cycleStartWeekMonday = new Date(cycleStart)
+  cycleStartWeekMonday.setDate(cycleStart.getDate() - cycleStartMonOffset)
   const currentWeekNumber = Math.floor(
-    (weekMonday.getTime() - firstWeekMonday.getTime()) / (7 * 24 * 3600 * 1000)
+    (weekMonday.getTime() - cycleStartWeekMonday.getTime()) / (7 * 24 * 3600 * 1000)
   ) + 1
 
   const fmt = (d: Date) => d.toISOString().split('T')[0]
@@ -247,19 +261,29 @@ export function calcDynamicGoals(
   // ── ESTRATÉGIA EVOLUTIVA ──────────────────────────────────
   if (strategy === 'evolutive') {
     const bankroll = currentBankroll && currentBankroll > 0 ? currentBankroll : initial
-    const riskLevel = getCurrentRiskLevel(bankroll, evolutiveTriggers)
+    const effectiveTriggers = evolutiveTriggers ?? goal.evolutive_triggers ?? undefined
+
+    // Se o usuário já ACEITOU algum gatilho antes, usa esse % (persistido) —
+    // não muda sozinho de novo até ele aceitar o próximo. Só no início
+    // (nunca decidiu nada ainda) que calcula automático em cima da banca
+    // inicial, como ponto de partida.
+    const riskLevel = goal.evolutive_current_pct != null
+      ? findRiskLevelByPct(goal.evolutive_current_pct, effectiveTriggers)
+      : getCurrentRiskLevel(initial, effectiveTriggers)
     const evolPct = riskLevel.percentage / 100
 
     const projection = calculateEvolutiveProjection(
       initial,
       cycleStartDate,
       totalOpDays,
-      evolutiveTriggers,
+      effectiveTriggers,
       goal.play_weekends
     )
 
-    const todayProjection = projection.find(p => p.date === todayStr)
-    const dailyGoal = todayProjection?.dailyGoal ?? bankroll * evolPct
+    // Meta de HOJE (ação real) usa a banca real + o % efetivo (aceito pelo
+    // usuário ou o inicial) — não o valor teórico da projeção, que é só a
+    // referência estável do plano completo.
+    const dailyGoal = bankroll * evolPct
 
     const weekStartProjection = projection.find(p => p.date === weekStartStr)
     const weekEndProjection   = projection.find(p => p.date === weekEndStr)
