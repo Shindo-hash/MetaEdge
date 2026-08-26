@@ -18,11 +18,17 @@ export default async function DashboardLayout({ children }: { children: React.Re
     .single()
 
   const userName = profile?.name ?? user.email ?? 'Usuário'
-  const isAdmin = !!ADMIN_EMAIL && (user.email ?? '').trim().toLowerCase() === ADMIN_EMAIL
+  const loginEmail = (user.email ?? '').trim().toLowerCase()
+  const isAdmin = !!ADMIN_EMAIL && loginEmail === ADMIN_EMAIL
+
+  // Log temporário de diagnóstico — não expõe a chave real, só confirma se
+  // bateu ou não e o tamanho de cada string (ajuda a achar espaço/caractere
+  // invisível sem mostrar o valor sensível nos logs do Vercel).
+  console.log(`[admin-check] login="${loginEmail}" (${loginEmail.length} chars) | ADMIN_EMAIL configurado=${!!ADMIN_EMAIL} (${ADMIN_EMAIL.length} chars) | bateu=${isAdmin}`)
 
   return (
     <div className="flex min-h-screen bg-[#0a0f1e]">
-      <Sidebar userName={userName} isAdmin={isAdmin} />
+      <Sidebar userName={userName} />
       <div className="flex-1 flex flex-col min-w-0">
         <Header userName={userName} />
         <main className="flex-1 p-6 md:p-10 overflow-auto">
