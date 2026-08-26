@@ -150,6 +150,49 @@ function buildRealCalendar(
   return rows
 }
 
+/**
+ * Calcula o "Total Projetado" HIPOTÉTICO — como se a meta tivesse começado
+ * no dia 1 do mês (não na data real de início), pra dar uma noção de "o
+ * teto do mês inteiro", separado do que falta ganhar de verdade a partir
+ * de hoje (esse outro cálculo usa a data real, via buildRealCalendar).
+ */
+function calcHypotheticalFullMonthTotal(
+  year: number,
+  month: number,
+  goalInitialBankroll: number,
+  strategy: 'fixed' | 'compound' | 'evolutive',
+  pct: number,
+  playWeekends: boolean,
+  dailyGoalFixed: number,
+  evolutiveTriggers?: EvolutiveTrigger[],
+): number {
+  const days = getDaysInMonth(year, month)
+  let total = 0
+  let bankroll = goalInitialBankroll
+
+  for (let d = 1; d <= days; d++) {
+    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    const dow = new Date(dateStr + 'T00:00:00').getDay()
+    const weekend = dow === 0 || dow === 6
+    if (!playWeekends && weekend) continue
+
+    if (strategy === 'compound') {
+      const dailyGoal = bankroll * pct
+      total += dailyGoal
+      bankroll = bankroll * (1 + pct)
+    } else if (strategy === 'evolutive') {
+      const tiers = evolutiveTriggers ?? DEFAULT_EVOLUTIVE_TRIGGERS
+      const tierPct = getCurrentRiskLevel(bankroll, tiers).percentage / 100
+      const dailyGoal = bankroll * tierPct
+      total += dailyGoal
+      bankroll = bankroll * (1 + tierPct)
+    } else {
+      total += dailyGoalFixed
+    }
+  }
+  return total
+}
+
 /* ── Page ─────────────────────────────────────────────────── */
 
 export default async function GoalsPage() {
@@ -231,7 +274,15 @@ export default async function GoalsPage() {
     : 0
   const progressDiff = accumulatedProfit - expectedProfit
   const isAhead      = progressDiff >= 0
-  const totalMeta    = calendarRows.reduce((s, r) => s + (r.meta ?? 0), 0)
+  const totalMeta = (goal && cycle)
+    ? calcHypotheticalFullMonthTotal(year, month, goal.initial_bankroll, goal.strategy, pct, goal.play_weekends, cycle.daily_goal_fixed, goal.evolutive_triggers ?? undefined)
+    : 0
+  // Quantos dias operacionais o mês inteiro tem (pro rótulo do hipotético
+  // bater com o número real de dias usados no cálculo acima)
+  const lastDayNum = new Date(year, month, 0).getDate()
+  const hypotheticalOpDays = goal
+    ? countOpDays(`${year}-${String(month).padStart(2, '0')}-01`, `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`, goal.play_weekends)
+    : 0
 
   // Quanto falta pra ganhar de HOJE até o fim do mês (não o mês inteiro)
   const todayRow = calendarRows.find(r => r.isToday)
@@ -429,7 +480,7 @@ export default async function GoalsPage() {
               </div>
             </div>
             <div className="text-right">
-              <p className="text-[10px] uppercase tracking-widest text-white/30 font-bold">Lucro projetado</p>
+              <p className="text-[10px] uppercase tracking-widest text-white/30 font-bold">Lucro projetado (mês inteiro, hipotético)</p>
               <p className="text-lg font-black text-accent-green">{formatCurrency(totalMeta)}</p>
             </div>
           </div>
@@ -515,7 +566,7 @@ export default async function GoalsPage() {
                 </tr>
                 <tr className="border-t-2 border-white/10 bg-white/[0.02]">
                   <td colSpan={2} className="px-8 py-4 text-xs font-black uppercase tracking-widest text-white/40">
-                    Total projetado ({cycle.op_days_total} dias operacionais)
+                    Total projetado ({hypotheticalOpDays} dias operacionais, se começasse no dia 1)
                   </td>
                   <td className="px-8 py-4 text-right text-base font-black text-accent-green">
                     {formatCurrency(totalMeta)}
