@@ -88,7 +88,12 @@ export async function openNewCycle(
   year: number,
   month: number,
 ): Promise<Cycle> {
-  const startDate      = firstDayOfMonth(year, month)
+  const firstOfMonth = firstDayOfMonth(year, month)
+  // Usa a data de início REAL da meta (goal.start_date) quando ela é depois
+  // do dia 1 do mês — isso cobre o caso de uma meta criada no meio do mês
+  // (ex: dia 25). Se a meta já vem de meses anteriores, usa o dia 1 mesmo
+  // (comportamento normal de virada de mês).
+  const startDate      = goal.start_date > firstOfMonth ? goal.start_date : firstOfMonth
   const endDate        = lastDayOfMonth(year, month)
   const opDays         = countOpDays(startDate, endDate, goal.play_weekends)
   const dailyGoalFixed = calcCycleDailyGoal(goal, opDays)
@@ -150,7 +155,13 @@ export async function ensureCycleForCurrentMonth(
     // Meta trocou no meio do caminho (mesmo mês, meta diferente) — recalcula
     // os números do ciclo pra bater com a estratégia nova, sem fechar o mês.
     if (cycle.goal_id !== goal.id) {
-      const opDays = countOpDays(cycle.start_date, lastDayOfMonth(year, month), goal.play_weekends)
+      // Recalcula os dias operacionais a partir da data de início DA META
+      // NOVA (goal.start_date), não do ciclo antigo — sem isso, o cálculo
+      // continuava contando desde a data velha por baixo dos panos, mesmo
+      // a tela mostrando a data nova certinha. Nunca deixa ser antes do
+      // dia 1 do mês atual (proteção extra).
+      const effectiveStart = goal.start_date > firstDayOfMonth(year, month) ? goal.start_date : firstDayOfMonth(year, month)
+      const opDays = countOpDays(effectiveStart, lastDayOfMonth(year, month), goal.play_weekends)
       const dailyGoalFixed = calcCycleDailyGoal(goal, opDays)
 
       const { data: updatedCycle, error } = await supabase
@@ -160,6 +171,7 @@ export async function ensureCycleForCurrentMonth(
           initial_bankroll:  goal.initial_bankroll,
           daily_goal_fixed:  dailyGoalFixed,
           op_days_total:     opDays,
+          start_date:        effectiveStart,
         })
         .eq('id', cycle.id)
         .select()
