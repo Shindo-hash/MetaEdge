@@ -11,12 +11,22 @@ type Props = { dailyGoal: number; currentBankroll: number; userId: string }
 
 export default function SessionForm({ dailyGoal, currentBankroll, userId }: Props) {
   const router = useRouter()
-  const today = new Date().toISOString().split('T')[0]
-  const now = new Date().toTimeString().slice(0, 5)
+
+  // Se estiver de madrugada (antes das 5h), é bem provável que seja
+  // continuação de uma sessão que começou ONTEM à noite — nesse caso, a
+  // data já vem preenchida com ontem em vez de hoje (evita registrar sem
+  // querer no dia errado, que fura a meta do dia seguinte sem ter jogado).
+  const nowDate = new Date()
+  const isEarlyMorning = nowDate.getHours() < 5
+  const defaultDateBase = new Date(nowDate)
+  if (isEarlyMorning) defaultDateBase.setDate(defaultDateBase.getDate() - 1)
+  const today = defaultDateBase.toISOString().split('T')[0]
+  const now = nowDate.toTimeString().slice(0, 5)
 
   const [date, setDate] = useState(today)
   const [startTime, setStartTime] = useState(now)
   const [endTime, setEndTime] = useState(now)
+  const [endTimeTouched, setEndTimeTouched] = useState(false)
   const [initialBankroll, setInitialBankroll] = useState(String(currentBankroll))
   const [finalBankroll, setFinalBankroll] = useState('')
   const [loading, setLoading] = useState(false)
@@ -33,8 +43,13 @@ export default function SessionForm({ dailyGoal, currentBankroll, userId }: Prop
     setError(null)
     const supabase = createClient()
 
+    // Se você não mexeu manualmente no horário de "Fim", usa o momento
+    // real de agora (não o horário congelado de quando a tela abriu) —
+    // assim o "Fim" reflete de verdade quando a sessão terminou.
+    const effectiveEndTime = endTimeTouched ? endTime : new Date().toTimeString().slice(0, 5)
+
     // SUGESTÃO 4 — validar horários
-    if (startTime && endTime && startTime >= endTime) {
+    if (startTime && effectiveEndTime && startTime >= effectiveEndTime) {
       setError('A hora de início deve ser anterior à hora de fim.')
       setLoading(false)
       return
@@ -64,7 +79,7 @@ export default function SessionForm({ dailyGoal, currentBankroll, userId }: Prop
       : calculatedProfit >= 0 ? 'win' : 'loss'
 
     const { error: insertError } = await supabase.from('sessions').insert({
-      user_id: userId, date, start_time: startTime, end_time: endTime,
+      user_id: userId, date, start_time: startTime, end_time: effectiveEndTime,
       initial_bankroll: initial, final_bankroll: final,
       result: calculatedResult, profit: calculatedProfit,
     })
@@ -84,6 +99,11 @@ export default function SessionForm({ dailyGoal, currentBankroll, userId }: Prop
         <div>
           <label className="field-label">Data</label>
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} required className="field-input" />
+          {isEarlyMorning && date === today && (
+            <p className="text-[10px] text-yellow-400/70 mt-1">
+              Ajustado pra ontem (madrugada) — confere se está certo
+            </p>
+          )}
         </div>
         <div>
           <label className="field-label">Meta Diária</label>
@@ -100,7 +120,10 @@ export default function SessionForm({ dailyGoal, currentBankroll, userId }: Prop
         </div>
         <div>
           <label className="field-label">Fim</label>
-          <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="field-input" />
+          <input type="time" value={endTime} onChange={(e) => { setEndTime(e.target.value); setEndTimeTouched(true) }} className="field-input" />
+          {!endTimeTouched && (
+            <p className="text-[10px] text-white/25 mt-1">Atualiza sozinho pro horário real ao enviar</p>
+          )}
         </div>
       </div>
 
