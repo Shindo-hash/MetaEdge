@@ -67,7 +67,12 @@ function buildRealCalendar(
     const weekend = dow === 0 || dow === 6
 
     const isPlayWeekends = cycle.op_days_total === days
-    const isOp = isPlayWeekends || !weekend
+    // Dias ANTES da meta começar de verdade não contam — sem essa checagem,
+    // o teórico ficava "compondo" silenciosamente desde o dia 1 do mês
+    // inteiro, mesmo que a meta só tenha começado no meio do mês (dia 25,
+    // por exemplo), inflando o valor de forma absurda.
+    const beforeCycleStart = dateStr < cycle.start_date
+    const isOp = (isPlayWeekends || !weekend) && !beforeCycleStart
 
     if (isOp) opDayIndex++
 
