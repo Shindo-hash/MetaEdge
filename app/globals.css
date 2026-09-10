@@ -354,11 +354,31 @@ input[type="time"].field-input {
   nav, aside, [class*="sidebar"], [class*="Sidebar"],
   header, [class*="header"], [class*="Header"] { display: none !important; }
 
-  /* Reset visual */
-  body, html { background: white !important; color: #111 !important; font-family: system-ui, sans-serif; }
-  .glass-card { background: white !important; border: 1px solid #e5e7eb !important; box-shadow: none !important; border-radius: 4px !important; }
+  /* Reset visual — mantém a identidade dark/glass do app */
+  body, html { background: #0b0f0e !important; color: #e8ece9 !important; font-family: system-ui, sans-serif; }
+  .glass-card { background: #121614 !important; border: 1px solid #232825 !important; box-shadow: none !important; border-radius: 10px !important; }
 
-  /* Tabelas compactas */
+  /* Cards de resumo */
+  .print-summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin: 10px 0 14px;
+  }
+  .print-summary-card {
+    background: #121614;
+    border: 1px solid #232825;
+    border-radius: 8px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .print-summary-card span { font-size: 8px; text-transform: uppercase; letter-spacing: 0.05em; color: #888780; }
+  .print-summary-card strong { font-size: 13px; color: #e8ece9; }
+  .print-summary-highlight { border-color: #1D9E75; background: #0f1f19; }
+
+  /* Tabela compacta */
   .print-table {
     width: 100%;
     border-collapse: collapse;
@@ -366,10 +386,11 @@ input[type="time"].field-input {
     page-break-inside: auto;
   }
   .print-table th {
-    background: #f3f4f6;
+    background: #121614;
+    color: #888780;
     padding: 4px 6px;
     text-align: left;
-    border-bottom: 1.5px solid #d1d5db;
+    border-bottom: 1.5px solid #232825;
     font-weight: 700;
     font-size: 8px;
     text-transform: uppercase;
@@ -380,17 +401,18 @@ input[type="time"].field-input {
   .print-table td.right { text-align: right; }
   .print-table td {
     padding: 3px 6px;
-    border-bottom: 1px solid #f3f4f6;
+    border-bottom: 1px solid #1a1e1c;
     page-break-inside: avoid;
     white-space: nowrap;
+    color: #e8ece9;
   }
-  .print-table tr.weekend td { color: #9ca3af; }
-  .print-table tr.today-row td { background: #f0fdf4; font-weight: 700; }
-  .print-table tfoot td { background: #f3f4f6; font-weight: 700; border-top: 1.5px solid #d1d5db; padding: 4px 6px; }
+  .print-table tr.today-row td { background: #0f1f19; font-weight: 700; }
+  .print-table tfoot td { background: #121614; font-weight: 700; border-top: 1.5px solid #232825; padding: 4px 6px; color: #e8ece9; }
 
-  .print-positive { color: #16a34a !important; font-weight: 700; }
-  .print-negative { color: #dc2626 !important; font-weight: 700; }
-  .print-muted    { color: #9ca3af !important; }
-  .print-header { margin-bottom: 10px; border-bottom: 2px solid #111; padding-bottom: 6px; }
-  .print-footer { margin-top: 8px; font-size: 8px; color: #9ca3af; }
+  .print-positive { color: #5DCAA5 !important; font-weight: 700; }
+  .print-negative { color: #E24B4A !important; font-weight: 700; }
+  .print-partial  { color: #EF9F27 !important; font-weight: 700; }
+  .print-muted    { color: #888780 !important; }
+  .print-header { margin-bottom: 6px; border-bottom: 1px solid #232825; padding-bottom: 6px; color: #e8ece9; }
+  .print-footer { margin-top: 8px; font-size: 8px; color: #444441; }
 }
