@@ -76,7 +76,7 @@ export default async function SessionsPage() {
         </div>
       </div>
 
-      <div className="glass-card p-8 animate-fade-in border-accent-green/10">
+      <div className="glass-card p-8 animate-fade-in border-accent-green/10 no-print">
         <div className="flex items-center gap-3 mb-6">
           <PlusCircle size={18} className="text-accent-green" />
           <h3 className="text-base font-bold text-white uppercase tracking-widest">Registrar Nova Sessão</h3>
@@ -150,47 +150,95 @@ export default async function SessionsPage() {
             ))}
           </div>
 
-          {/* Tabela de impressão (apenas no print) */}
+          {/* Relatório de impressão (apenas no print) */}
           <div className="print-only">
             <div className="print-header">
-              <h1 style={{ fontSize: 15, fontWeight: 800, margin: 0 }}>MetaEdge PRO — Histórico de Sessões</h1>
-              <p style={{ fontSize: 9, color: '#6b7280', margin: '2px 0 0' }}>
-                {sessions.length} sessões registradas ·
-                Impresso em {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+              <h1 style={{ fontSize: 15, fontWeight: 800, margin: 0 }}>MetaEdge — Registro de Atividades e Sessões</h1>
+              <p style={{ fontSize: 9, margin: '2px 0 0' }}>
+                Emissão: {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })} — {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
               </p>
             </div>
+
+            {(() => {
+              const totalLucro = sessions.reduce((s, x) => s + x.profit, 0)
+              const totalMin = sessions.reduce((s, x) => {
+                if (!x.start_time || !x.end_time) return s
+                const [h1, m1] = x.start_time.split(':').map(Number)
+                const [h2, m2] = x.end_time.split(':').map(Number)
+                let diff = (h2 * 60 + m2) - (h1 * 60 + m1)
+                if (diff < 0) diff += 24 * 60
+                return s + diff
+              }, 0)
+              const tempoMedio = sessions.length ? Math.round(totalMin / sessions.length) : 0
+
+              return (
+                <div className="print-summary">
+                  <div className="print-summary-card">
+                    <span>Banca Inicial</span>
+                    <strong>{formatCurrency(sessions[sessions.length - 1]?.initial_bankroll ?? 0)}</strong>
+                  </div>
+                  <div className="print-summary-card">
+                    <span>Banca Atual</span>
+                    <strong>{formatCurrency(sessions[0]?.final_bankroll ?? 0)}</strong>
+                  </div>
+                  <div className="print-summary-card print-summary-highlight">
+                    <span>Lucro Total</span>
+                    <strong className={totalLucro >= 0 ? 'print-positive' : 'print-negative'}>
+                      {totalLucro >= 0 ? '+' : ''}{formatCurrency(totalLucro)}
+                    </strong>
+                  </div>
+                  <div className="print-summary-card">
+                    <span>Tempo Médio</span>
+                    <strong>{tempoMedio} min · {sessions.length} sessões</strong>
+                  </div>
+                </div>
+              )
+            })()}
+
             <table className="print-table">
               <thead>
                 <tr>
                   <th>Data</th>
                   <th>Início</th>
                   <th>Fim</th>
+                  <th>Duração</th>
                   <th className="right">Banca Inicial</th>
+                  <th className="right">Lucro</th>
                   <th className="right">Banca Final</th>
-                  <th className="right">Profit</th>
                   <th>Resultado</th>
                 </tr>
               </thead>
               <tbody>
-                {sessions.map((session) => (
-                  <tr key={session.id}>
-                    <td>{formatDate(session.date)}</td>
-                    <td className="print-muted">{session.start_time ?? '—'}</td>
-                    <td className="print-muted">{session.end_time ?? '—'}</td>
-                    <td className="right print-muted">{formatCurrency(session.initial_bankroll)}</td>
-                    <td className="right">{formatCurrency(session.final_bankroll)}</td>
-                    <td className={`right ${session.profit >= 0 ? 'print-positive' : 'print-negative'}`}>
-                      {session.profit >= 0 ? '+' : ''}{formatCurrency(session.profit)}
-                    </td>
-                    <td className={
-                      session.result === 'win' ? 'print-positive'
-                      : session.result === 'loss' ? 'print-negative'
-                      : 'print-muted'
-                    }>
-                      {session.result === 'win' ? '✓ Win' : session.result === 'loss' ? '✗ Loss' : '~ Parcial'}
-                    </td>
-                  </tr>
-                ))}
+                {sessions.map((session) => {
+                  let duracao = '—'
+                  if (session.start_time && session.end_time) {
+                    const [h1, m1] = session.start_time.split(':').map(Number)
+                    const [h2, m2] = session.end_time.split(':').map(Number)
+                    let diff = (h2 * 60 + m2) - (h1 * 60 + m1)
+                    if (diff < 0) diff += 24 * 60
+                    duracao = diff >= 60 ? `${Math.floor(diff / 60)}h ${String(diff % 60).padStart(2, '0')}m` : `${diff} min`
+                  }
+                  return (
+                    <tr key={session.id}>
+                      <td>{formatDate(session.date)}</td>
+                      <td className="print-muted">{session.start_time ?? '—'}</td>
+                      <td className="print-muted">{session.end_time ?? '—'}</td>
+                      <td className="print-muted">{duracao}</td>
+                      <td className="right print-muted">{formatCurrency(session.initial_bankroll)}</td>
+                      <td className={`right ${session.profit >= 0 ? 'print-positive' : 'print-negative'}`}>
+                        {session.profit >= 0 ? '+' : ''}{formatCurrency(session.profit)}
+                      </td>
+                      <td className="right">{formatCurrency(session.final_bankroll)}</td>
+                      <td className={
+                        session.result === 'win' ? 'print-positive'
+                        : session.result === 'loss' ? 'print-negative'
+                        : 'print-partial'
+                      }>
+                        {session.result === 'win' ? '✓ Win' : session.result === 'loss' ? '✗ Loss' : '~ Parcial'}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
               <tfoot>
                 <tr>
@@ -201,11 +249,11 @@ export default async function SessionsPage() {
                       return `${t >= 0 ? '+' : ''}${formatCurrency(t)}`
                     })()}
                   </td>
-                  <td>{sessions.filter(s => s.result === 'win').length} wins</td>
+                  <td colSpan={2} />
                 </tr>
               </tfoot>
             </table>
-            <p className="print-footer">MetaEdge PRO</p>
+            <p className="print-footer">MetaEdge — Relatório de Atividades Gerado Automaticamente</p>
           </div>
         </div>
       )}
